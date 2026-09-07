@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mass Mailer</title>
+  <link rel="stylesheet" href="sidepanel.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- ═══ Header ═══ -->
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">✉️</span>
+      <h1>Mass Mailer</h1>
+    </div>
+    <div class="daily-counter" id="dailyCounter" title="Emails sent today">
+      <span class="counter-value" id="dailyCount">0</span>
+      <span class="counter-label">/ 500 today</span>
+    </div>
+  </header>
+
+  <!-- ═══ Step indicator ═══ -->
+  <div class="steps" id="stepIndicator">
+    <div class="step active" data-step="1">
+      <span class="step-num">1</span><span class="step-label">Sheet</span>
+    </div>
+    <div class="step" data-step="2">
+      <span class="step-num">2</span><span class="step-label">Compose</span>
+    </div>
+    <div class="step" data-step="3">
+      <span class="step-num">3</span><span class="step-label">Config</span>
+    </div>
+    <div class="step" data-step="4">
+      <span class="step-num">4</span><span class="step-label">Send</span>
+    </div>
+  </div>
+
+  <!-- ═══ Toasts ═══ -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       STEP 1 — Connect Sheet
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="panel active" id="step1">
+    <div class="card">
+      <h2 class="card-title">📊 Connect Google Sheet</h2>
+      <p class="card-desc">Paste the URL of your Google Sheet containing recipient data.</p>
+      <div class="input-group">
+        <input type="text" id="sheetUrl" class="input"
+               placeholder="https://docs.google.com/spreadsheets/d/...">
+      </div>
+      <button id="connectBtn" class="btn btn-primary btn-full">Connect</button>
+    </div>
+
+    <!-- Shown after successful connection -->
+    <div class="card hidden" id="sheetInfo">
+      <h3 class="card-subtitle">✅ Sheet Connected</h3>
+      <div class="sheet-meta">
+        <div class="meta-item">
+          <span class="meta-label">Tab:</span>
+          <select id="tabSelect" class="select select-sm"></select>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Rows:</span>
+          <span class="meta-value" id="rowCount">0</span>
+        </div>
+      </div>
+
+      <div class="columns-section">
+        <h4>Detected Columns (use as placeholders):</h4>
+        <div class="column-chips" id="columnChips"></div>
+      </div>
+
+      <button id="toStep2" class="btn btn-primary btn-full" style="margin-top:14px">
+        Next: Compose Email →
+      </button>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       STEP 2 — Compose
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="panel" id="step2">
+    <div class="card">
+      <h2 class="card-title">✏️ Compose Email</h2>
+      <p class="card-desc">Click a placeholder chip to insert it at the cursor. Placeholders are case-sensitive.</p>
+
+      <!-- Template save / load -->
+      <div class="template-actions">
+        <select id="templateSelect" class="select select-sm">
+          <option value="">— Load Template —</option>
+        </select>
+        <button id="saveTemplateBtn" class="btn btn-sm btn-ghost">💾 Save</button>
+      </div>
+
+      <div class="input-group">
+        <label class="label">Subject</label>
+        <input type="text" id="subjectInput" class="input" data-field="subject"
+               placeholder='e.g.  Quick question about {Company Name}'>
+      </div>
+
+      <div class="input-group">
+        <label class="label">Body</label>
+        <textarea id="bodyInput" class="textarea" rows="10" data-field="body"
+                  placeholder='Hi {Name},&#10;&#10;I came across {Company Name} and ...'></textarea>
+      </div>
+
+      <!-- Placeholder chips (populated by JS) -->
+      <div class="placeholder-bar" id="placeholderBar">
+        <span class="placeholder-label">Insert:</span>
+      </div>
+
+      <!-- Attachment -->
+      <div class="input-group">
+        <label class="label">📎 Attachment (optional)</label>
+        <div class="file-input-wrapper">
+          <input type="file" id="attachmentInput" class="file-input">
+          <div class="file-display" id="fileDisplay">
+            <span class="file-placeholder" id="fileName">Click to select a file (e.g. resume.pdf)</span>
+          </div>
+        </div>
+        <button id="removeAttachment" class="btn btn-sm btn-ghost hidden" style="margin-top:6px">✕ Remove file</button>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="backToStep1" class="btn btn-ghost">← Back</button>
+      <button id="toStep3" class="btn btn-primary">Next: Configure →</button>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       STEP 3 — Configure
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="panel" id="step3">
+    <div class="card">
+      <h2 class="card-title">⚙️ Configure Campaign</h2>
+
+      <!-- Sending mode -->
+      <div class="input-group">
+        <label class="label">Sending Mode</label>
+        <div class="mode-toggle">
+          <button class="mode-btn active" data-mode="realtime" id="modeRealtime">
+            <span class="mode-icon">⚡</span>
+            <span class="mode-name">Real-time</span>
+            <span class="mode-desc">Browser stays open</span>
+          </button>
+          <button class="mode-btn" data-mode="background" id="modeBackground">
+            <span class="mode-icon">☁️</span>
+            <span class="mode-name">Background</span>
+            <span class="mode-desc">Close &amp; forget</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Smart delay -->
+      <div class="input-group">
+        <label class="label">Smart Delay Between Emails</label>
+        <div class="delay-presets" id="delayPresets">
+          <button class="delay-btn" data-min="5000" data-max="8000">
+            🐇 Fast<br><small>5–8 s</small>
+          </button>
+          <button class="delay-btn active" data-min="10000" data-max="20000">
+            🐢 Safe<br><small>10–20 s</small>
+          </button>
+          <button class="delay-btn" data-min="30000" data-max="60000">
+            🦥 Stealth<br><small>30–60 s</small>
+          </button>
+          <button class="delay-btn" data-min="custom" data-max="custom" id="customDelayToggle">
+            ⚙️ Custom<br><small>You set</small>
+          </button>
+        </div>
+
+        <div class="custom-delay hidden" id="customDelay">
+          <div class="range-row">
+            <label>Min: <strong id="minDelayVal">10</strong> s</label>
+            <input type="range" id="minDelaySlider" class="slider" min="1" max="120" value="10">
+          </div>
+          <div class="range-row">
+            <label>Max: <strong id="maxDelayVal">20</strong> s</label>
+            <input type="range" id="maxDelaySlider" class="slider" min="2" max="300" value="20">
+          </div>
+        </div>
+      </div>
+
+      <div class="info-box hidden" id="backgroundInfo">
+        <span class="info-icon">ℹ️</span>
+        <p>Background mode creates Gmail drafts. You'll need a small Google Apps Script to send them automatically — setup instructions will be shown after queueing.</p>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="backToStep2" class="btn btn-ghost">← Back</button>
+      <button id="toStep4" class="btn btn-primary">Preview &amp; Send →</button>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       STEP 4 — Preview & Send
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="panel" id="step4">
+    <div class="card">
+      <h2 class="card-title">👁️ Preview</h2>
+      <p class="card-desc">First 3 personalised emails — make sure everything looks right.</p>
+      <div id="previewEmails" class="preview-list"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">📊 Campaign Summary</h2>
+      <div class="summary-grid">
+        <div class="summary-item">
+          <span class="summary-value" id="summaryTotal">0</span>
+          <span class="summary-label">Total Emails</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-value" id="summarySkip">0</span>
+          <span class="summary-label">Already Sent</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-value" id="summaryToSend">0</span>
+          <span class="summary-label">To Send</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-value" id="summaryMode">⚡ Real-time</span>
+          <span class="summary-label">Mode</span>
+        </div>
+      </div>
+      <div class="limit-warning hidden" id="limitWarning">
+        ⚠️ This campaign may push you past Gmail's daily 500-email limit.
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="backToStep3" class="btn btn-ghost">← Back</button>
+      <button id="startCampaignBtn" class="btn btn-success btn-full">🚀 Start Campaign</button>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       DASHBOARD — shown during / after campaign
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="panel" id="dashboard">
+    <div class="card">
+      <h2 class="card-title">📡 Campaign Dashboard</h2>
+
+      <div class="progress-section">
+        <div class="progress-bar-container">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <span class="progress-text" id="progressText">0 %</span>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat sent">
+          <span class="stat-value" id="statSent">0</span>
+          <span class="stat-label">Sent ✓</span>
+        </div>
+        <div class="stat failed">
+          <span class="stat-value" id="statFailed">0</span>
+          <span class="stat-label">Failed ✗</span>
+        </div>
+        <div class="stat pending">
+          <span class="stat-value" id="statPending">0</span>
+          <span class="stat-label">Pending</span>
+        </div>
+        <div class="stat skipped">
+          <span class="stat-value" id="statSkipped">0</span>
+          <span class="stat-label">Skipped</span>
+        </div>
+      </div>
+
+      <div class="campaign-status" id="campaignStatusArea">
+        <span class="status-badge running" id="statusBadge">Running…</span>
+      </div>
+    </div>
+
+    <div class="campaign-controls" id="campaignControls">
+      <button id="pauseBtn" class="btn btn-warning">⏸ Pause</button>
+      <button id="resumeBtn" class="btn btn-primary hidden">▶ Resume</button>
+      <button id="stopBtn" class="btn btn-danger">⏹ Stop</button>
+      <button id="newCampaignBtn" class="btn btn-ghost hidden">+ New Campaign</button>
+    </div>
+  </section>
+
+  <!-- Scripts -->
+  <script src="utils.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

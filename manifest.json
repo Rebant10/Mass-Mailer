@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Mass Mailer",
+  "description": "Send personalized cold emails from Gmail using Google Sheets data with smart delays and background sending.",
+  "version": "1.0.0",
+  "permissions": [
+    "identity",
+    "storage",
+    "sidePanel",
+    "activeTab"
+  ],
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.compose",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/spreadsheets"
+    ]
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Mass Mailer"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "host_permissions": [
+    "https://sheets.googleapis.com/*",
+    "https://gmail.googleapis.com/*"
+  ]
+}
