@@ -14,27 +14,128 @@
 function parsePlaceholders(template, rowData) {
   return template.replace(/\{([^}]+)\}/g, (match, key) => {
     if (Object.prototype.hasOwnProperty.call(rowData, key)) {
-      return rowData[key] ?? '';
+      const val = rowData[key];
+      return (val !== undefined && val !== null) ? String(val).trim() : '';
     }
     return match; // Leave unmatched placeholders as-is
   });
 }
 
 /**
- * Build an RFC 2822 MIME message.
- * Plain-text only.  Supports an optional binary attachment encoded as base64.
+ * Convert a UTF-8 string to base64.
+ * Safe across browser window, Chrome extension service workers, and Node.js.
+ *
+ * @param {string} str
+ * @returns {string} base64-encoded string
+ */
+function toBase64Utf8(str) {
+  if (typeof TextEncoder !== 'undefined') {
+    const encoder = new TextEncoder();
+    const bytes   = encoder.encode(str);
+    let binary    = '';
+    const len     = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(str, 'utf8').toString('base64');
+  }
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+/**
+ * Wrap base64 string into 76-character lines per RFC 2045.
+ *
+ * @param {string} b64
+ * @returns {string}
+ */
+function wrapBase64(b64) {
+  if (!b64) return '';
+  const clean = b64.replace(/[\r\n]/g, '');
+  let res = '';
+  for (let i = 0; i < clean.length; i += 76) {
+    res += clean.substring(i, i + 76) + '\r\n';
+  }
+  return res.trimEnd();
+}
+
+/**
+ * Escape HTML special characters for safe email embedding.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Convert plain-text email body into responsive, beautifully styled HTML.
+ * Double newlines create paragraphs (<p>), and every line break intentionally
+ * added by the user (Enter) is preserved with <br>, while continuous sentences
+ * reflow responsively across all screen sizes.
+ *
+ * @param {string} bodyText
+ * @returns {string} Complete responsive HTML document string
+ */
+function bodyToHtml(bodyText) {
+  if (!bodyText) return '';
+  const normalized = bodyText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const paragraphs = normalized.split(/\n\s*\n+/);
+
+  const htmlParagraphs = paragraphs.map(p => {
+    const trimmed = p.trim();
+    if (!trimmed) return '';
+
+    const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return '';
+
+    // If the user explicitly pressed Enter to create separate lines, preserve them
+    const formattedLines = lines.map(line => escapeHtml(line)).join('<br>\n');
+    return `<p style="margin: 0 0 1em 0; line-height: 1.6;">${formattedLines}</p>`;
+  }).filter(Boolean).join('\n');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.6; color: #222222; margin: 0; padding: 0;">
+${htmlParagraphs}
+</body>
+</html>`;
+}
+
+/**
+ * Build an RFC 2822 / RFC 2046 MIME message.
+ * Generates multipart/alternative with both text/plain and responsive text/html
+ * (both base64 encoded for UTF-8 and line-length safety), nested in multipart/mixed
+ * if an attachment is provided.
  *
  * @param {string}      to         - Recipient email address
  * @param {string}      subject    - Email subject line
- * @param {string}      body       - Plain-text body
+ * @param {string}      body       - Email body
  * @param {Object|null} attachment - { name: string, mimeType: string, base64Data: string } or null
  * @returns {string} Complete MIME message
  */
 function buildMimeMessage(to, subject, body, attachment = null) {
-  const boundary = `boundary_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  const boundaryMixed = `boundary_mixed_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const boundaryAlt   = `boundary_alt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
   // Encode subject for UTF-8 safety (RFC 2047)
-  const encodedSubject = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`;
+  const encodedSubject = `=?UTF-8?B?${toBase64Utf8(subject)}?=`;
+
+  const htmlBody     = bodyToHtml(body);
+  const plainBodyB64 = wrapBase64(toBase64Utf8(body));
+  const htmlBodyB64  = wrapBase64(toBase64Utf8(htmlBody));
 
   let message = '';
 
@@ -42,34 +143,57 @@ function buildMimeMessage(to, subject, body, attachment = null) {
     message += `To: ${to}\r\n`;
     message += `Subject: ${encodedSubject}\r\n`;
     message += `MIME-Version: 1.0\r\n`;
-    message += `Content-Type: multipart/mixed; boundary="${boundary}"\r\n`;
+    message += `Content-Type: multipart/mixed; boundary="${boundaryMixed}"\r\n`;
     message += `\r\n`;
-    // Text part
-    message += `--${boundary}\r\n`;
+
+    // Alternative part (text + html)
+    message += `--${boundaryMixed}\r\n`;
+    message += `Content-Type: multipart/alternative; boundary="${boundaryAlt}"\r\n`;
+    message += `\r\n`;
+
+    message += `--${boundaryAlt}\r\n`;
     message += `Content-Type: text/plain; charset="UTF-8"\r\n`;
-    message += `Content-Transfer-Encoding: 7bit\r\n`;
+    message += `Content-Transfer-Encoding: base64\r\n`;
     message += `\r\n`;
-    message += `${body}\r\n`;
+    message += `${plainBodyB64}\r\n`;
+
+    message += `--${boundaryAlt}\r\n`;
+    message += `Content-Type: text/html; charset="UTF-8"\r\n`;
+    message += `Content-Transfer-Encoding: base64\r\n`;
+    message += `\r\n`;
+    message += `${htmlBodyB64}\r\n`;
+
+    message += `--${boundaryAlt}--\r\n`;
+
     // Attachment part
-    message += `--${boundary}\r\n`;
+    message += `--${boundaryMixed}\r\n`;
     message += `Content-Type: ${attachment.mimeType}; name="${attachment.name}"\r\n`;
     message += `Content-Disposition: attachment; filename="${attachment.name}"\r\n`;
     message += `Content-Transfer-Encoding: base64\r\n`;
     message += `\r\n`;
-    // Split base64 into 76-char lines per RFC 2045
-    const b64 = attachment.base64Data;
-    for (let i = 0; i < b64.length; i += 76) {
-      message += b64.substring(i, i + 76) + '\r\n';
-    }
-    message += `--${boundary}--`;
+    message += `${wrapBase64(attachment.base64Data)}\r\n`;
+
+    message += `--${boundaryMixed}--`;
   } else {
     message += `To: ${to}\r\n`;
     message += `Subject: ${encodedSubject}\r\n`;
     message += `MIME-Version: 1.0\r\n`;
-    message += `Content-Type: text/plain; charset="UTF-8"\r\n`;
-    message += `Content-Transfer-Encoding: 7bit\r\n`;
+    message += `Content-Type: multipart/alternative; boundary="${boundaryAlt}"\r\n`;
     message += `\r\n`;
-    message += body;
+
+    message += `--${boundaryAlt}\r\n`;
+    message += `Content-Type: text/plain; charset="UTF-8"\r\n`;
+    message += `Content-Transfer-Encoding: base64\r\n`;
+    message += `\r\n`;
+    message += `${plainBodyB64}\r\n`;
+
+    message += `--${boundaryAlt}\r\n`;
+    message += `Content-Type: text/html; charset="UTF-8"\r\n`;
+    message += `Content-Transfer-Encoding: base64\r\n`;
+    message += `\r\n`;
+    message += `${htmlBodyB64}\r\n`;
+
+    message += `--${boundaryAlt}--`;
   }
 
   return message;

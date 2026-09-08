@@ -533,6 +533,7 @@ function resetToStep1() {
   attachment  = null;
   currentStep = 1;
   els.sheetUrl.value       = '';
+  els.templateSelect.value = '';
   els.subjectInput.value   = '';
   els.bodyInput.value      = '';
   els.sheetInfo.classList.add('hidden');
@@ -631,8 +632,4 @@ function promptModal(title, label) {
   });
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
+

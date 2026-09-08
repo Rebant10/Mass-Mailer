@@ -162,10 +162,13 @@ async function fetchSheetTab(sheetId, tabName) {
   const values = data.values || [];
   if (values.length < 2) throw new Error('Sheet needs at least a header row and one data row');
 
-  const headers = values[0];
+  const headers = values[0].map(h => String(h || '').trim());
   const rows = values.slice(1).map((row, idx) => {
     const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+    headers.forEach((h, i) => {
+      const val = row[i] !== undefined && row[i] !== null ? String(row[i]).trim() : '';
+      obj[h] = val;
+    });
     obj._rowIndex = idx + 2; // 1-based, skip header
     return obj;
   });
