@@ -1,83 +1,65 @@
-# Apps Script Setup Guide — Background Sending Mode
+# Google Apps Script Setup Guide — Autonomous Cloud Mode
 
-This guide walks you through deploying the Google Apps Script that sends your queued Gmail drafts automatically from the cloud.
+> Run your cold outreach campaigns 24/7 on Google Cloud even when your computer is completely turned OFF.
 
-**Time needed:** ~3 minutes (one-time setup)
+All campaign settings (status, dates, active days of week, business hours, batch size, delays, and company caps) are automatically created and updated by the Chrome Extension in your sheet's `_MailerConfig` tab.
 
----
-
-## Step 1: Open Google Apps Script
-
-Go to **[script.google.com](https://script.google.com)** → click **New Project**
-
-## Step 2: Paste the Code
-
-1. Delete any existing code in the editor
-2. Open the file `Code.gs` from this folder
-3. Copy the **entire** contents and paste it into the Apps Script editor
-
-## Step 3: Update Configuration
-
-Near the top of the script, find these two lines and update them:
-
-```javascript
-const SHEET_ID  = 'PASTE_YOUR_SPREADSHEET_ID_HERE';
-const SHEET_TAB = 'Sheet1';
-```
-
-- **SHEET_ID**: The long ID from your Google Sheet URL
-  - Example URL: `https://docs.google.com/spreadsheets/d/1aBcDeFgHiJkLmNoPqRsTuVwXyZ/edit`
-  - The ID is: `1aBcDeFgHiJkLmNoPqRsTuVwXyZ`
-- **SHEET_TAB**: The name of the tab containing your campaign data (usually `Sheet1`)
-
-## Step 4: Run Setup
-
-1. In the toolbar, select **`setup`** from the function dropdown
-2. Click **▶ Run**
-3. A permissions dialog will appear — click **Review Permissions**
-4. Select your Google account
-5. Click **Advanced** → **Go to [project name] (unsafe)** → **Allow**
-6. Check the **Execution log** — you should see: `✅ Trigger created`
-
-## Step 5: Verify
-
-1. Select **`checkQueue`** from the function dropdown
-2. Click **▶ Run**
-3. The log should show how many drafts are queued
+**Time needed:** ~2 minutes (one-time setup).
 
 ---
 
-## Controlling the Trigger
+## ⚡ Quick Setup
 
-| Action | How |
-|--------|-----|
-| **Pause sending** | Run `teardown()` |
-| **Resume sending** | Run `setup()` |
-| **Change interval** | Edit the `everyMinutes(1)` value in `setup()` and re-run it |
-| **Check status** | Run `checkQueue()` |
+### Step 1: Open Apps Script
+1. Open your outreach Google Sheet in your browser.
+2. In the top menu, click **Extensions** → **Apps Script**.
+   *(Alternatively, visit [script.google.com](https://script.google.com) and click **New Project**).*
 
-## Adjusting Send Speed
+### Step 2: Paste `Code.gs`
+1. In the Apps Script editor, replace any default code in `Code.gs` with the full contents of [`Code.gs`](Code.gs).
+2. Click the **💾 Save** icon (or press `Ctrl + S`).
 
-In the `setup()` function, change the trigger interval:
+### Step 3: Set Sheet ID (Only if using Standalone Script)
+* **If opened from your Google Sheet (Bound Script)**: You don't need to configure anything! The script automatically connects to the open sheet.
+* **If created as a Standalone Project**: Paste your spreadsheet ID on line 34:
+  ```javascript
+  const SHEET_ID = 'YOUR_SPREADSHEET_ID_HERE';
+  ```
 
-```javascript
-// Every 1 minute (fast — sends 60/hour)
-.everyMinutes(1)
+### Step 4: Run `setup` (One-Time)
+1. In the top toolbar, select **`setup`** from the function dropdown.
+2. Click **▶ Run**.
+3. A Google authorization popup will appear:
+   - Click **Review Permissions**.
+   - Choose your Google account.
+   - Click **Advanced** → **Go to [Project Name] (unsafe)** → **Allow**.
+4. Check the **Execution Log** at the bottom. You will see:
+   > `✅ Trigger created! Mass Mailer Cloud Scheduler will run every 5 minutes.`
 
-// Every 5 minutes (moderate — sends 12/hour)
-.everyMinutes(5)
+**You're all done!** You can now close Google Sheets and shut down your computer.
 
-// Every 10 minutes (slow — sends 6/hour)
-.everyMinutes(10)
-```
+---
 
-After changing, run `setup()` again to apply.
+## 🎮 How to Control Cloud Campaigns
 
-## Troubleshooting
+| Action | How to do it | What happens |
+| :--- | :--- | :--- |
+| **Activate 24/7 Schedule** | Select **`setup`** → click **▶ Run** | Installs a 5-minute Google Cloud trigger that checks your schedule and sends batches. |
+| **Test 1 Batch Immediately** | Select **`processQueue`** → click **▶ Run** | Executes a single batch right now and logs execution details in the log console. |
+| **Stop / Cancel Cloud Campaign** | Click **`🛑 Stop & Cancel Cloud Campaign`** in the Chrome Extension OR select **`teardown`** in Apps Script → click **▶ Run** | Sets status to `Stopped`, deletes queued Gmail drafts, clears sheet cells, and removes the 5-minute trigger. |
 
-| Issue | Solution |
-|-------|----------|
-| "Draft not found" | The draft may have been manually deleted from Gmail |
-| "Authorization required" | Re-run `setup()` and re-authorize |
-| Emails not sending | Check **Executions** tab in Apps Script editor for error logs |
-| Want to stop immediately | Run `teardown()` |
+---
+
+## 🧠 Autonomous Intelligence Features
+
+1. **Gatekeeper Scheduling**:
+   - **Specific Dates Mode**: Sends every day between start and end dates within working hours.
+   - **Days of Week Mode**: Adheres to your Start Date, then recurs weekly only on selected active days (e.g. Mon–Fri) during working hours.
+2. **Dynamic Batch Sizing**:
+   - Reads your configured batch size (e.g. 2 per 5 min) directly from `_MailerConfig`.
+3. **Zero-Touch Live Additions**:
+   - Add or paste new rows into your Google Sheet from any device (laptop, tablet, phone) at any time. Apps Script automatically detects new blank rows, personalizes your email template, and sends them during the next active window.
+4. **Safety Guards**:
+   - Automatically prevents duplicate sends to the same email address.
+   - Enforces company-level email limits (leaving capped contacts clean and un-sent for future outreach).
+   - Halts immediately if daily limits are approached.

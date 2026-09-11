@@ -45,15 +45,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function handleMessage(msg) {
   switch (msg.action) {
-    // Auth
+    // Auth & Account
     case 'authenticate':
       return { success: true, token: await getAuthToken() };
+    case 'getAccountInfo':
+      const accountData = await getAccountInfo();
+      return { success: true, account: accountData, accountInfo: accountData };
 
     // Sheets
     case 'fetchSheet':
       return { success: true, data: await fetchSheetData(msg.sheetUrl) };
     case 'fetchTab':
-      return { success: true, data: await fetchSheetTab(msg.sheetId, msg.tabName) };
+      return { success: true, data: await fetchSheetTab(msg.sheetId, msg.tabName || msg.sheetName) };
+    case 'syncSheet':
+      const syncTab = msg.tabName || msg.sheetName || 'Sheet1';
+      return { success: true, data: await fetchSheetTab(msg.sheetId, syncTab) };
 
     // Campaign controls
     case 'startCampaign':
@@ -68,6 +74,10 @@ async function handleMessage(msg) {
     case 'stopCampaign':
       stopCampaign();
       return { success: true };
+    case 'stopCloudCampaign':
+      const stopResult = await stopCloudCampaign(msg.sheetId, msg.targetTab || msg.sheetName);
+      stopCampaign();
+      return { success: true, ...stopResult };
 
     // State
     case 'getCampaignState':
@@ -81,7 +91,7 @@ async function handleMessage(msg) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  AUTH
+//  AUTH & ACCOUNT
 // ═══════════════════════════════════════════════════════════════════
 
 function getAuthToken() {
@@ -96,6 +106,31 @@ function getAuthToken() {
   });
 }
 
+/**
+ * Fetch Gmail profile to detect Personal vs. Google Workspace account.
+ */
+async function getAccountInfo() {
+  const token = await getAuthToken();
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    throw new Error(`Profile fetch failed: ${res.status}`);
+  }
+  const profile = await res.json();
+  const email = (profile.emailAddress || '').trim();
+  const isWorkspace = !/@(gmail|googlemail)\.com$/i.test(email);
+  const accountType = isWorkspace ? 'Workspace' : 'Personal';
+
+  return {
+    email,
+    accountType,
+    isWorkspace,
+    dailyLimitRealtime: isWorkspace ? 2000 : 500,
+    dailyLimitCloud: isWorkspace ? 1500 : 100
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  GOOGLE SHEETS API
 // ═══════════════════════════════════════════════════════════════════
@@ -108,6 +143,23 @@ async function apiFetch(url) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error?.message || `API ${res.status}`);
+  }
+  return res.json();
+}
+
+async function apiPost(url, body) {
+  const token = await getAuthToken();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `API POST ${res.status}`);
   }
   return res.json();
 }
@@ -127,6 +179,19 @@ async function apiPut(url, body) {
     throw new Error(err.error?.message || `API PUT ${res.status}`);
   }
   return res.json();
+}
+
+async function apiDelete(url) {
+  const token = await getAuthToken();
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!res.ok && res.status !== 404) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `API DELETE ${res.status}`);
+  }
+  return true;
 }
 
 /**
@@ -156,8 +221,9 @@ async function fetchSheetData(sheetUrl) {
  * Fetch all rows from a specific tab.
  */
 async function fetchSheetTab(sheetId, tabName) {
+  const safeTab = tabName || 'Sheet1';
   const data = await apiFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(tabName)}`
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(safeTab)}`
   );
   const values = data.values || [];
   if (values.length < 2) throw new Error('Sheet needs at least a header row and one data row');
@@ -289,16 +355,180 @@ function findEmailColumn(headers) {
       || null;
 }
 
+/**
+ * Identify the company column (case-insensitive search across headers).
+ */
+function findCompanyColumn(headers) {
+  const exact = ['Company', 'company', 'COMPANY', 'Company Name', 'company name',
+                 'Organization', 'organization', 'Employer', 'employer'];
+  return headers.find(h => exact.includes(h))
+      || headers.find(h => h.toLowerCase().includes('company'))
+      || null;
+}
+
+/**
+ * Write campaign configuration and schedule to _MailerConfig tab in Google Sheets.
+ */
+async function writeSheetConfig(sheetId, config) {
+  if (!sheetId || !config) return;
+  try {
+    const meta = await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`
+    );
+    const tabs = meta.sheets || [];
+    const configTabExists = tabs.some(s => s.properties.title === '_MailerConfig');
+
+    if (!configTabExists) {
+      await apiPost(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`,
+        {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: '_MailerConfig',
+                  gridProperties: { rowCount: 25, columnCount: 3 }
+                }
+              }
+            }
+          ]
+        }
+      );
+    }
+
+    const schedule = config.schedule || {};
+    const values = [
+      ['Setting', 'Value'],
+      ['status', 'Active'],
+      ['scheduleType', schedule.scheduleType || 'dates'],
+      ['targetTab', config.sheetName || 'Sheet1'],
+      ['subject', config.template?.subject || ''],
+      ['body', config.template?.body || ''],
+      ['startDate', schedule.startDate || ''],
+      ['endDate', schedule.endDate || ''],
+      ['activeDays', schedule.scheduleType === 'days' && Array.isArray(schedule.activeDays) ? schedule.activeDays.join(',') : ''],
+      ['startTime', schedule.startTime || '09:00'],
+      ['endTime', schedule.endTime || '17:00'],
+      ['batchSize', String(schedule.batchSize || 2)],
+      ['delaySeconds', String(schedule.delaySeconds || 5)],
+      ['dailyLimit', String(schedule.dailyLimit || 40)],
+      ['allCompanyLimit', (config.companyLimits?.all !== null && config.companyLimits?.all !== undefined) ? String(config.companyLimits.all) : ''],
+      ['companyLimits', JSON.stringify(config.companyLimits?.companies || {})],
+      ['lastConfiguredAt', new Date().toISOString()]
+    ];
+
+    await apiPut(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/_MailerConfig!A1:B${values.length}?valueInputOption=RAW`,
+      { values }
+    );
+  } catch (err) {
+    console.error('Failed to write _MailerConfig tab:', err);
+  }
+}
+
+async function stopCloudCampaign(sheetId, targetTab) {
+  let clearedRowsCount = 0;
+  let deletedDraftsCount = 0;
+
+  try {
+    // 1. Mark _MailerConfig status as Stopped
+    try {
+      const cfgData = await apiFetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/_MailerConfig!A1:B25`
+      ).catch(() => null);
+
+      let statusRow = 2;
+      if (cfgData && cfgData.values) {
+        const idx = cfgData.values.findIndex(r => r[0] && String(r[0]).trim().toLowerCase() === 'status');
+        if (idx !== -1) statusRow = idx + 1;
+      }
+
+      await apiPut(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/_MailerConfig!A${statusRow}:B${statusRow}?valueInputOption=RAW`,
+        { values: [['status', 'Stopped']] }
+      );
+    } catch (e) {
+      console.warn('Could not update _MailerConfig status:', e);
+    }
+
+    // 2. Clear any 'Queued 📋' or 'Pending ⏳' rows in target tab & delete Gmail drafts
+    if (targetTab) {
+      const data = await apiFetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(targetTab)}`
+      );
+      const values = data.values || [];
+      if (values.length >= 2) {
+        const headers = values[0];
+        const statusIdx = headers.indexOf('Status');
+        const draftIdIdx = headers.indexOf('Draft ID');
+        if (statusIdx !== -1) {
+          const updates = [];
+          for (let i = 1; i < values.length; i++) {
+            const statusVal = values[i][statusIdx];
+            if (statusVal === 'Queued 📋' || statusVal === 'Pending ⏳') {
+              const rowNum = i + 1;
+              clearedRowsCount++;
+
+              // Delete corresponding draft from Gmail if ID exists
+              if (draftIdIdx !== -1 && values[i][draftIdIdx]) {
+                const draftId = values[i][draftIdIdx];
+                try {
+                  await apiDelete(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${draftId}`);
+                  deletedDraftsCount++;
+                } catch (e) {
+                  console.warn(`Could not delete draft ${draftId}:`, e);
+                }
+                const draftLetter = columnToLetter(draftIdIdx + 1);
+                updates.push({
+                  range: `${targetTab}!${draftLetter}${rowNum}`,
+                  values: [['']]
+                });
+              }
+
+              const colLetter = columnToLetter(statusIdx + 1);
+              updates.push({
+                range: `${targetTab}!${colLetter}${rowNum}`,
+                values: [['']]
+              });
+            }
+          }
+          if (updates.length > 0) {
+            await apiPost(
+              `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`,
+              {
+                valueInputOption: 'RAW',
+                data: updates
+              }
+            );
+          }
+        }
+      }
+    }
+
+    return {
+      clearedRows: clearedRowsCount,
+      deletedDrafts: deletedDraftsCount
+    };
+  } catch (err) {
+    console.error('Failed to stop cloud campaign:', err);
+    throw err;
+  }
+}
+
 async function startCampaign(config) {
   const { rows, headers, template, attachment,
-          sheetId, sheetName, mode, delay } = config;
+          sheetId, sheetName, mode, delay,
+          companyLimits, schedule } = config;
 
   Object.assign(campaign, {
     isRunning: true, isPaused: false,
     currentIndex: 0, totalRows: rows.length,
     sentCount: 0, failedCount: 0, skippedCount: 0,
     rows, headers, template, attachment,
-    sheetId, sheetName, mode, delay
+    sheetId, sheetName, mode, delay,
+    companyLimits: companyLimits || { all: null, companies: {} },
+    schedule: schedule || {},
+    config
   });
 
   // Ensure Status / Sent At columns
@@ -311,10 +541,11 @@ async function startCampaign(config) {
   await persistState();
   broadcast('state');
 
-  if (mode === 'realtime') {
-    executeRealtime();
-  } else {
+  if (mode === 'background') {
+    await writeSheetConfig(sheetId, config);
     executeBackground();
+  } else {
+    executeRealtime();
   }
 }
 
@@ -326,6 +557,28 @@ async function executeRealtime() {
     broadcast('error', 'No "Email" column found in sheet headers.');
     stopCampaign();
     return;
+  }
+
+  const companyCol = findCompanyColumn(campaign.headers);
+
+  // Pre-seed company sent counts from existing rows marked 'Sent ✓'
+  const companySentCount = {};
+  if (companyCol) {
+    for (const r of campaign.rows) {
+      if (r['Status'] === 'Sent ✓') {
+        const c = (r[companyCol] || '').trim();
+        if (c) companySentCount[c] = (companySentCount[c] || 0) + 1;
+      }
+    }
+  }
+
+  // Pre-seed seen emails to protect against duplicates
+  const seenEmails = new Set();
+  for (const r of campaign.rows) {
+    if (r['Status'] === 'Sent ✓') {
+      const e = (r[emailCol] || '').trim().toLowerCase();
+      if (e) seenEmails.add(e);
+    }
   }
 
   for (let i = campaign.currentIndex; i < campaign.rows.length; i++) {
@@ -356,9 +609,31 @@ async function executeRealtime() {
       continue;
     }
 
+    // Duplicate email protection: bypass if this email was already sent/seen
+    const emailLower = email.toLowerCase();
+    if (seenEmails.has(emailLower)) {
+      campaign.skippedCount++;
+      broadcast('state');
+      continue; // Bypass without writing "Skipped" to sheet
+    }
+
+    // Company cap protection: check if company reached limit
+    if (companyCol && campaign.companyLimits) {
+      const company = (row[companyCol] || '').trim();
+      const cap = (campaign.companyLimits.companies && campaign.companyLimits.companies[company] !== undefined)
+        ? campaign.companyLimits.companies[company]
+        : campaign.companyLimits.all;
+
+      if (cap !== null && cap !== undefined && (companySentCount[company] || 0) >= cap) {
+        campaign.skippedCount++;
+        broadcast('state');
+        continue; // Bypass without writing "Skipped" to sheet
+      }
+    }
+
     // Daily limit guard (stop at 490 to leave headroom)
     if (campaign.dailySentCount >= 490) {
-      broadcast('error', 'Approaching Gmail daily limit (500). Campaign paused.');
+      broadcast('error', 'Approaching Gmail daily limit. Campaign paused.');
       pauseCampaign();
       continue;
     }
@@ -374,6 +649,12 @@ async function executeRealtime() {
 
       campaign.sentCount++;
       campaign.dailySentCount++;
+      seenEmails.add(emailLower);
+      if (companyCol) {
+        const company = (row[companyCol] || '').trim();
+        if (company) companySentCount[company] = (companySentCount[company] || 0) + 1;
+      }
+
       await markRow(row._rowIndex, 'sent');
       await incrementDailySent();
       broadcast('state');
@@ -412,6 +693,28 @@ async function executeBackground() {
     return;
   }
 
+  const companyCol = findCompanyColumn(campaign.headers);
+
+  // Pre-seed company sent counts from existing rows marked 'Sent ✓'
+  const companySentCount = {};
+  if (companyCol) {
+    for (const r of campaign.rows) {
+      if (r['Status'] === 'Sent ✓') {
+        const c = (r[companyCol] || '').trim();
+        if (c) companySentCount[c] = (companySentCount[c] || 0) + 1;
+      }
+    }
+  }
+
+  // Pre-seed seen emails to protect against duplicates
+  const seenEmails = new Set();
+  for (const r of campaign.rows) {
+    if (r['Status'] === 'Sent ✓') {
+      const e = (r[emailCol] || '').trim().toLowerCase();
+      if (e) seenEmails.add(e);
+    }
+  }
+
   let queued = 0;
 
   for (let i = 0; i < campaign.rows.length; i++) {
@@ -435,6 +738,28 @@ async function executeBackground() {
       continue;
     }
 
+    // Duplicate email protection
+    const emailLower = email.toLowerCase();
+    if (seenEmails.has(emailLower)) {
+      campaign.skippedCount++;
+      broadcast('state');
+      continue;
+    }
+
+    // Company cap protection
+    if (companyCol && campaign.companyLimits) {
+      const company = (row[companyCol] || '').trim();
+      const cap = (campaign.companyLimits.companies && campaign.companyLimits.companies[company] !== undefined)
+        ? campaign.companyLimits.companies[company]
+        : campaign.companyLimits.all;
+
+      if (cap !== null && cap !== undefined && (companySentCount[company] || 0) >= cap) {
+        campaign.skippedCount++;
+        broadcast('state');
+        continue;
+      }
+    }
+
     try {
       const subject = parsePlaceholders(campaign.template.subject, row);
       const body    = parsePlaceholders(campaign.template.body, row);
@@ -449,6 +774,11 @@ async function executeBackground() {
 
       await markRow(row._rowIndex, 'queued');
       queued++;
+      seenEmails.add(emailLower);
+      if (companyCol) {
+        const company = (row[companyCol] || '').trim();
+        if (company) companySentCount[company] = (companySentCount[company] || 0) + 1;
+      }
       broadcast('state');
     } catch (err) {
       campaign.failedCount++;

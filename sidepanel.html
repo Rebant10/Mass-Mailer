@@ -13,13 +13,27 @@
 
   <!-- ═══ Header ═══ -->
   <header class="header">
-    <div class="logo">
-      <span class="logo-icon">✉️</span>
-      <h1>Mass Mailer</h1>
+    <div class="header-main">
+      <div class="logo">
+        <img src="icons/icon48.png" alt="Mass Mailer" class="logo-img">
+        <h1>Mass Mailer</h1>
+      </div>
+      <div class="header-actions">
+        <button id="syncBtn" class="btn-sync" title="Sync latest data from connected Google Sheet">
+          <span class="sync-icon">🔄</span>
+          <span class="sync-text">Sync</span>
+        </button>
+      </div>
     </div>
-    <div class="daily-counter" id="dailyCounter" title="Emails sent today">
-      <span class="counter-value" id="dailyCount">0</span>
-      <span class="counter-label">/ 500 today</span>
+    <div class="header-sub">
+      <div class="account-pill" id="accountBadge" title="Detected Google account type">
+        <span class="account-indicator"></span>
+        <span id="accountType">Detecting account...</span>
+      </div>
+      <div class="daily-counter" id="dailyCounter" title="Emails sent today vs daily quota">
+        <span class="counter-value" id="dailyCount">0</span>
+        <span class="counter-label" id="quotaLabel">/ 500 today</span>
+      </div>
     </div>
   </header>
 
@@ -157,8 +171,8 @@
         </div>
       </div>
 
-      <!-- Smart delay -->
-      <div class="input-group">
+      <!-- Smart delay (Real-time mode) -->
+      <div class="input-group" id="realtimeDelayGroup">
         <label class="label">Smart Delay Between Emails</label>
         <div class="delay-presets" id="delayPresets">
           <button class="delay-btn" data-min="5000" data-max="8000">
@@ -187,9 +201,112 @@
         </div>
       </div>
 
-      <div class="info-box hidden" id="backgroundInfo">
-        <span class="info-icon">ℹ️</span>
-        <p>Background mode creates Gmail drafts. You'll need a small Google Apps Script to send them automatically — setup instructions will be shown after queueing.</p>
+      <!-- Cloud Schedule Settings (Background mode) -->
+      <div class="cloud-schedule-settings hidden" id="cloudScheduleSettings">
+        
+        <!-- Schedule Type Switcher -->
+        <div class="input-group">
+          <label class="label">🗓️ Schedule Method</label>
+          <div class="schedule-type-toggle">
+            <button type="button" class="sched-type-btn active" id="schedTypeDates" data-type="dates">
+              📅 Specific Dates
+            </button>
+            <button type="button" class="sched-type-btn" id="schedTypeDays" data-type="days">
+              📆 Days of Week
+            </button>
+          </div>
+        </div>
+
+        <!-- Dates Configuration -->
+        <div id="schedDatesSection" class="sched-section">
+          <div class="time-range-row">
+            <div class="time-col">
+              <label class="label">📅 Start Date</label>
+              <input type="date" id="scheduleStartDate" class="input">
+            </div>
+            <div class="time-col">
+              <label class="label">🏁 End Date (Optional)</label>
+              <input type="date" id="scheduleEndDate" class="input">
+            </div>
+          </div>
+          <p class="field-hint">Sends every day between start &amp; end dates during business hours. Day-of-week is not restricted.</p>
+        </div>
+
+        <!-- Days Configuration -->
+        <div id="schedDaysSection" class="sched-section hidden">
+          <div class="input-group">
+            <label class="label">📆 Active Days of Week</label>
+            <div class="schedule-days" id="scheduleDays">
+              <button type="button" class="day-pill active" data-day="1">Mon</button>
+              <button type="button" class="day-pill active" data-day="2">Tue</button>
+              <button type="button" class="day-pill active" data-day="3">Wed</button>
+              <button type="button" class="day-pill active" data-day="4">Thu</button>
+              <button type="button" class="day-pill active" data-day="5">Fri</button>
+              <button type="button" class="day-pill" data-day="6">Sat</button>
+              <button type="button" class="day-pill" data-day="0">Sun</button>
+            </div>
+          </div>
+          <div class="input-group">
+            <label class="label">📅 Start Date (Optional)</label>
+            <input type="date" id="scheduleDaysStartDate" class="input">
+          </div>
+          <p class="field-hint">Recurs weekly only on selected days during business hours.</p>
+        </div>
+
+        <div class="input-group">
+          <label class="label">⏰ Sending Window (Business Hours)</label>
+          <div class="time-range-row">
+            <div class="time-col">
+              <span class="time-label">From:</span>
+              <input type="time" id="scheduleStartTime" class="input input-sm" value="09:00">
+            </div>
+            <div class="time-col">
+              <span class="time-label">To:</span>
+              <input type="time" id="scheduleEndTime" class="input input-sm" value="17:00">
+            </div>
+          </div>
+        </div>
+
+        <!-- Cloud Cadence & Limits -->
+        <div class="time-range-row" style="margin-bottom:10px;">
+          <div class="time-col">
+            <label class="label">⚡ Batch Size (per 5 min)</label>
+            <input type="number" id="scheduleBatchSize" class="input" min="1" max="25" value="2">
+            <p class="field-hint">Emails sent per 5-min cycle (~24/hr at 2)</p>
+          </div>
+          <div class="time-col">
+            <label class="label">🎯 Daily Send Limit</label>
+            <input type="number" id="scheduleDailyLimit" class="input" min="1" max="500" value="40">
+            <p class="field-hint">Max emails sent per 24 hours</p>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label class="label">⏱️ Pause Between Emails In Batch (Seconds)</label>
+          <input type="number" id="scheduleBatchDelay" class="input" min="1" max="30" value="5">
+          <p class="field-hint">Jitter delay between multiple sends in the same cycle</p>
+        </div>
+
+        <div class="info-box" id="backgroundInfo" style="margin-top:10px;">
+          <span class="info-icon">ℹ️</span>
+          <p>All settings are written transparently to the <code>_MailerConfig</code> tab in your sheet. Apps Script executes 24/7 in Google Cloud.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Company Email Limits (Applies to both Real-time and Cloud) -->
+    <div class="card">
+      <h2 class="card-title">🏢 Company Email Limits</h2>
+      <p class="card-desc">Set max emails per company. Companies without a limit will email all entries. Unsent rows remain clean in the sheet.</p>
+
+      <div class="company-limits-container" id="companyLimitsContainer">
+        <div id="companyLimitsList" class="company-limits-list"></div>
+        <div id="noCompanyNotice" class="info-note hidden">
+          ℹ️ No "Company" column detected in sheet headers.
+        </div>
+        <button id="addCompanyLimitBtn" type="button" class="btn btn-sm btn-ghost" style="margin-top:8px">
+          + Add Company Limit
+        </button>
       </div>
     </div>
 
@@ -214,7 +331,7 @@
       <div class="summary-grid">
         <div class="summary-item">
           <span class="summary-value" id="summaryTotal">0</span>
-          <span class="summary-label">Total Emails</span>
+          <span class="summary-label">Total in Sheet</span>
         </div>
         <div class="summary-item">
           <span class="summary-value" id="summarySkip">0</span>
@@ -229,9 +346,20 @@
           <span class="summary-label">Mode</span>
         </div>
       </div>
-      <div class="limit-warning hidden" id="limitWarning">
-        ⚠️ This campaign may push you past Gmail's daily 500-email limit.
+
+      <div class="warning-box hidden" id="duplicateWarning" style="margin-top:10px;">
+        ⚠️ <span id="duplicateCountText">0 duplicate emails detected in sheet — duplicates will be skipped.</span>
       </div>
+
+      <div class="limit-warning hidden" id="limitWarning">
+        ⚠️ This campaign may push you past your daily sending limit.
+      </div>
+    </div>
+
+    <!-- Company Cap Breakdown (Step 4) -->
+    <div class="card hidden" id="companyBreakdownCard">
+      <h2 class="card-title">🏢 Company Cap Breakdown</h2>
+      <div id="companyBreakdownList" class="company-breakdown-list"></div>
     </div>
 
     <div class="btn-row">
@@ -282,6 +410,7 @@
       <button id="pauseBtn" class="btn btn-warning">⏸ Pause</button>
       <button id="resumeBtn" class="btn btn-primary hidden">▶ Resume</button>
       <button id="stopBtn" class="btn btn-danger">⏹ Stop</button>
+      <button id="stopCloudBtn" class="btn btn-danger hidden">🛑 Stop &amp; Cancel Cloud Campaign</button>
       <button id="newCampaignBtn" class="btn btn-ghost hidden">+ New Campaign</button>
     </div>
   </section>
