@@ -29,14 +29,13 @@ const els = {
   dailyCount:      $('dailyCount'),
 
   // Step 1
-  sheetUrl:           $('sheetUrl'),
-  connectBtn:         $('connectBtn'),
-  sheetInfo:          $('sheetInfo'),
-  disconnectSheetBtn: $('disconnectSheetBtn'),
-  tabSelect:          $('tabSelect'),
-  rowCount:           $('rowCount'),
-  columnChips:        $('columnChips'),
-  toStep2:            $('toStep2'),
+  sheetUrl:    $('sheetUrl'),
+  connectBtn:  $('connectBtn'),
+  sheetInfo:   $('sheetInfo'),
+  tabSelect:   $('tabSelect'),
+  rowCount:    $('rowCount'),
+  columnChips: $('columnChips'),
+  toStep2:     $('toStep2'),
 
   // Sender Accounts (Step 1)
   accountModeSingle:          $('accountModeSingle'),
@@ -142,14 +141,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   await detectAccount();
   await initSenderAccounts();
 
-  // Restore last connected sheet URL and auto-connect so the doc stays until removed
+  // Restore last connected sheet URL if available
   try {
     const stored = await chrome.storage.local.get('lastConnectedSheetUrl');
-    if (stored.lastConnectedSheetUrl) {
-      if (els.sheetUrl && !els.sheetUrl.value) {
-        els.sheetUrl.value = stored.lastConnectedSheetUrl;
-      }
-      await connectSheet(true /* silent */);
+    if (stored.lastConnectedSheetUrl && els.sheetUrl && !els.sheetUrl.value) {
+      els.sheetUrl.value = stored.lastConnectedSheetUrl;
     }
   } catch {}
 });
@@ -184,10 +180,7 @@ function wireEvents() {
   els.syncBtn.addEventListener('click', syncSheet);
 
   // ── Step navigation ──
-  $('connectBtn').addEventListener('click', () => connectSheet(false));
-  if (els.disconnectSheetBtn) {
-    els.disconnectSheetBtn.addEventListener('click', disconnectSheet);
-  }
+  $('connectBtn').addEventListener('click', connectSheet);
   $('toStep2').addEventListener('click',    () => goToStep(2));
   $('backToStep1').addEventListener('click', () => goToStep(1));
   $('toStep3').addEventListener('click',    () => goToStep(3));
@@ -353,17 +346,12 @@ function showDashboard() {
 //  STEP 1 — CONNECT SHEET
 // ═══════════════════════════════════════════════════════════════════
 
-async function connectSheet(silent = false) {
+async function connectSheet() {
   const url = els.sheetUrl.value.trim();
-  if (!url) {
-    if (!silent) toast('Please enter a Google Sheets URL.', 'error');
-    return;
-  }
+  if (!url) { toast('Please enter a Google Sheets URL.', 'error'); return; }
 
-  if (!silent) {
-    els.connectBtn.disabled = true;
-    els.connectBtn.textContent = 'Connecting…';
-  }
+  els.connectBtn.disabled = true;
+  els.connectBtn.textContent = 'Connecting…';
 
   try {
     // Authenticate first
@@ -377,24 +365,14 @@ async function connectSheet(silent = false) {
     sheetData = res.data;
     renderSheetInfo();
     await refreshDailyCount();
-    await chrome.storage.local.set({ lastConnectedSheetUrl: url });
-    if (!silent) toast('Sheet connected!', 'success');
+    chrome.storage.local.set({ lastConnectedSheetUrl: url }).catch(() => {});
+    toast('Sheet connected!', 'success');
   } catch (err) {
-    if (!silent) toast(err.message || 'Failed to connect sheet.', 'error');
+    toast(err.message || 'Failed to connect sheet.', 'error');
   } finally {
     els.connectBtn.disabled = false;
     els.connectBtn.textContent = 'Connect';
   }
-}
-
-async function disconnectSheet() {
-  sheetData = null;
-  if (els.sheetUrl) els.sheetUrl.value = '';
-  if (els.sheetInfo) els.sheetInfo.classList.add('hidden');
-  await chrome.storage.local.remove('lastConnectedSheetUrl');
-  refreshCompanyLimitsUI();
-  await refreshDailyCount();
-  toast('Sheet link removed.', 'info');
 }
 
 function renderSheetInfo() {
@@ -1562,29 +1540,20 @@ function showCancellationModal(details = {}) {
 
 function resetToStep1() {
   stopDashboardPolling();
-  currentStep = 1;
+  sheetData   = null;
   attachment  = null;
+  currentStep = 1;
+  els.sheetUrl.value       = '';
   els.templateSelect.value = '';
   els.subjectInput.value   = '';
   els.bodyInput.value      = '';
+  els.sheetInfo.classList.add('hidden');
   if (els.companyLimitsList) els.companyLimitsList.innerHTML = '';
   if (els.duplicateWarning) els.duplicateWarning.classList.add('hidden');
   if (els.companyBreakdownCard) els.companyBreakdownCard.classList.add('hidden');
   if (els.stopCloudBtn) els.stopCloudBtn.classList.add('hidden');
   clearAttachment();
   els.startCampaignBtn.disabled = false;
-
-  // Keep sheet link persistent until user explicitly clicks remove
-  chrome.storage.local.get('lastConnectedSheetUrl').then(stored => {
-    if (stored.lastConnectedSheetUrl) {
-      if (els.sheetUrl) els.sheetUrl.value = stored.lastConnectedSheetUrl;
-      if (sheetData) renderSheetInfo();
-    } else {
-      if (els.sheetUrl) els.sheetUrl.value = '';
-      if (els.sheetInfo) els.sheetInfo.classList.add('hidden');
-    }
-  });
-
   goToStep(1);
 }
 

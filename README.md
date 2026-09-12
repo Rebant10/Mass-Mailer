@@ -27,8 +27,8 @@
 
 ---
 
-### 2. 🔄 Persistent Sheet Link & Live Sync
-- **Persistent Document Connection**: The connected Google Sheet URL remains permanently saved in the extension's local storage and auto-reconnects on launch. It stays connected until you explicitly click **`✕ Remove / Change`**.
+### 2. 🔄 Persistent Sheet URL & Live Sync
+- **Persistent Sheet URL**: Automatically remembers the last connected Google Sheet URL in local storage so you don't have to search for and re-paste your sheet link every time you open the extension.
 - **Instant Sheet Sync (`🔄 Sync`)**: Refresh headers, new rows, and cell statuses at any step without losing drafted templates or configured limits.
 - **Account Type Detection**: Automatically identifies whether you are logged into a **Personal Gmail** (`@gmail.com`) or a **Google Workspace** domain.
 - **Dynamic Quota Counter**: Automatically aggregates daily send limits across your active inboxes:
@@ -145,7 +145,7 @@ If you wish to use **☁️ Background Mode** to send emails 24/7 with your comp
 
 1. Open **Gmail** in Chrome and open the **Mass Mailer** side panel (or click the toolbar icon).
 2. **Step 1 — Connect Sheet & Senders**:
-   - Paste your Google Sheet URL and click **Connect**. (Your sheet link stays saved and auto-reconnects automatically).
+   - Paste your Google Sheet URL and click **Connect** (remembers your previously used URL automatically).
    - Choose **`👤 Single`** (default) or **`👥 Multi-Pool`** (add 2+ inboxes, personalize signatures, and attach specific resumes).
 3. **Step 2 — Compose**:
    - Write your subject and body.
