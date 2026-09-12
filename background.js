@@ -23,10 +23,15 @@ let campaign = {
   sheetId: '',
   sheetName: '',
   mode: 'realtime',
+  accountMode: 'single',
+  senders: [],
+  currentSenderIndex: -1,
   delay: { min: 10000, max: 20000 },
   statusColIndex: -1,
   sentAtColIndex: -1,
-  draftIdColIndex: -1
+  draftIdColIndex: -1,
+  sentFromColIndex: -1,
+  attachmentColIndex: -1
 };
 
 // ─── Side Panel Behaviour ────────────────────────────────────────
@@ -51,6 +56,9 @@ async function handleMessage(msg) {
     case 'getAccountInfo':
       const accountData = await getAccountInfo();
       return { success: true, account: accountData, accountInfo: accountData };
+    case 'addGoogleAccount':
+      const newAccount = await addGoogleAccount(msg.webClientId);
+      return { success: true, account: newAccount };
 
     // Sheets
     case 'fetchSheet':
@@ -128,6 +136,90 @@ async function getAccountInfo() {
     isWorkspace,
     dailyLimitRealtime: isWorkspace ? 2000 : 500,
     dailyLimitCloud: isWorkspace ? 1500 : 100
+  };
+}
+
+/**
+ * Authenticate an additional Google Account via OAuth2 Web Auth Flow.
+ * Enables connecting 2nd, 3rd, 4th, 5th+ Personal or Workspace accounts to the sender pool.
+ */
+async function addGoogleAccount(overrideClientId = null) {
+  const stored = await chrome.storage.local.get('webClientId');
+  const clientId = overrideClientId || stored.webClientId || chrome.runtime.getManifest().oauth2?.client_id;
+  if (!clientId) {
+    throw new Error('OAuth2 client_id not found.');
+  }
+
+  const redirectUrl = chrome.identity.getRedirectURL();
+  const scopes = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/spreadsheets'
+  ].join(' ');
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth` +
+    `?client_id=${encodeURIComponent(clientId)}` +
+    `&response_type=token` +
+    `&redirect_uri=${encodeURIComponent(redirectUrl)}` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&prompt=select_account`;
+
+  const responseUrl = await new Promise((resolve, reject) => {
+    chrome.identity.launchWebAuthFlow(
+      { url: authUrl, interactive: true },
+      (res) => {
+        if (chrome.runtime.lastError || !res) {
+          const rawErr = chrome.runtime.lastError?.message || '';
+          if (rawErr.includes('redirect_uri_mismatch') || rawErr.includes('bad request') || !res) {
+            reject(new Error(rawErr || 'Authentication was cancelled or failed.'));
+          } else {
+            reject(new Error(rawErr));
+          }
+        } else {
+          resolve(res);
+        }
+      }
+    );
+  });
+
+  // Extract access token from URL fragment: ...#access_token=...&expires_in=...
+  const urlObj = new URL(responseUrl);
+  const hashParams = new URLSearchParams(urlObj.hash.substring(1));
+  const token = hashParams.get('access_token');
+  const expiresIn = parseInt(hashParams.get('expires_in') || '3600', 10);
+
+  if (!token) {
+    throw new Error('Failed to retrieve access token from Google.');
+  }
+
+  // Fetch account profile using the newly acquired access token
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    throw new Error(`Profile fetch failed: ${res.status}`);
+  }
+  const profile = await res.json();
+  const email = (profile.emailAddress || '').trim();
+  const isWorkspace = !/@(gmail|googlemail)\.com$/i.test(email);
+
+  return {
+    id: 'sender_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    email,
+    name: email.split('@')[0],
+    title: '',
+    signature: '',
+    phone: '',
+    isWorkspace,
+    accountType: isWorkspace ? 'Workspace' : 'Personal',
+    dailyLimitRealtime: isWorkspace ? 2000 : 500,
+    dailyLimitCloud: isWorkspace ? 1500 : 100,
+    dailyLimit: isWorkspace ? 2000 : 500,
+    token,
+    tokenExpiresAt: Date.now() + (expiresIn * 1000),
+    isPrimary: false,
+    attachment: null
   };
 }
 
@@ -254,17 +346,23 @@ async function writeCell(sheetId, tabName, row, col, value) {
 }
 
 /**
- * Ensure Status, Sent At (and Draft ID for background mode) columns exist.
+ * Ensure Status, Sent At (and Draft ID for background mode, plus Sent From & Attachment Sent for multi-account) columns exist.
  * Returns their 1-based column indices.
  */
-async function ensureStatusColumns(sheetId, tabName, headers) {
-  let statusCol  = headers.indexOf('Status');
-  let sentAtCol  = headers.indexOf('Sent At');
-  let draftIdCol = headers.indexOf('Draft ID');
+async function ensureStatusColumns(sheetId, tabName, headers, isMultiAccount = false) {
+  let statusCol     = headers.indexOf('Status');
+  let sentAtCol     = headers.indexOf('Sent At');
+  let draftIdCol    = headers.indexOf('Draft ID');
+  let sentFromCol   = headers.indexOf('Sent From');
+  let attachmentCol = headers.indexOf('Attachment Sent');
 
   const toAdd = [];
   if (statusCol  === -1) { statusCol  = headers.length + toAdd.length; toAdd.push('Status');   }
   if (sentAtCol  === -1) { sentAtCol  = headers.length + toAdd.length; toAdd.push('Sent At');  }
+  if (isMultiAccount) {
+    if (sentFromCol   === -1) { sentFromCol   = headers.length + toAdd.length; toAdd.push('Sent From'); }
+    if (attachmentCol === -1) { attachmentCol = headers.length + toAdd.length; toAdd.push('Attachment Sent'); }
+  }
   if (campaign.mode === 'background' && draftIdCol === -1) {
     draftIdCol = headers.length + toAdd.length;
     toAdd.push('Draft ID');
@@ -281,9 +379,11 @@ async function ensureStatusColumns(sheetId, tabName, headers) {
   }
 
   return {
-    statusCol:  statusCol  + 1,
-    sentAtCol:  sentAtCol  + 1,
-    draftIdCol: draftIdCol !== -1 ? draftIdCol + 1 : -1
+    statusCol:     statusCol     + 1,
+    sentAtCol:     sentAtCol     + 1,
+    draftIdCol:    draftIdCol    !== -1 ? draftIdCol    + 1 : -1,
+    sentFromCol:   sentFromCol   !== -1 ? sentFromCol   + 1 : -1,
+    attachmentCol: attachmentCol !== -1 ? attachmentCol + 1 : -1
   };
 }
 
@@ -291,8 +391,8 @@ async function ensureStatusColumns(sheetId, tabName, headers) {
 //  GMAIL API
 // ═══════════════════════════════════════════════════════════════════
 
-async function sendEmailViaAPI(to, subject, body, attachment) {
-  const token = await getAuthToken();
+async function sendEmailViaAPI(to, subject, body, attachment, customToken = null) {
+  const token = customToken || await getAuthToken();
   const mime  = buildMimeMessage(to, subject, body, attachment);
   const raw   = base64UrlEncode(mime);
 
@@ -316,8 +416,8 @@ async function sendEmailViaAPI(to, subject, body, attachment) {
   return res.json();
 }
 
-async function createDraftViaAPI(to, subject, body, attachment) {
-  const token = await getAuthToken();
+async function createDraftViaAPI(to, subject, body, attachment, customToken = null) {
+  const token = customToken || await getAuthToken();
   const mime  = buildMimeMessage(to, subject, body, attachment);
   const raw   = base64UrlEncode(mime);
 
@@ -338,6 +438,25 @@ async function createDraftViaAPI(to, subject, body, attachment) {
     throw new Error(err.error?.message || `Draft error ${res.status}`);
   }
   return res.json();
+}
+
+/**
+ * Pick next available sender in round-robin order that hasn't hit their daily limit.
+ * Returns { sender, index } or null if all senders exhausted.
+ */
+function getNextAvailableSender(senders, lastIndex = -1) {
+  if (!senders || senders.length === 0) return null;
+  const n = senders.length;
+  for (let step = 1; step <= n; step++) {
+    const idx = (lastIndex + step) % n;
+    const s = senders[idx];
+    const sent = s.sentToday || 0;
+    const limit = s.dailyLimit || (s.isWorkspace ? 2000 : 500);
+    if (sent < limit) {
+      return { sender: s, index: idx };
+    }
+  }
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -518,7 +637,10 @@ async function stopCloudCampaign(sheetId, targetTab) {
 async function startCampaign(config) {
   const { rows, headers, template, attachment,
           sheetId, sheetName, mode, delay,
-          companyLimits, schedule } = config;
+          companyLimits, schedule,
+          accountMode, senders } = config;
+
+  const isMulti = accountMode === 'multi' && Array.isArray(senders) && senders.length > 0;
 
   Object.assign(campaign, {
     isRunning: true, isPaused: false,
@@ -526,16 +648,28 @@ async function startCampaign(config) {
     sentCount: 0, failedCount: 0, skippedCount: 0,
     rows, headers, template, attachment,
     sheetId, sheetName, mode, delay,
+    accountMode: isMulti ? 'multi' : 'single',
+    senders: isMulti ? senders : (senders && senders.length > 0 ? [senders[0]] : []),
+    currentSenderIndex: -1,
     companyLimits: companyLimits || { all: null, companies: {} },
     schedule: schedule || {},
     config
   });
 
-  // Ensure Status / Sent At columns
-  const cols = await ensureStatusColumns(sheetId, sheetName, headers);
-  campaign.statusColIndex  = cols.statusCol;
-  campaign.sentAtColIndex  = cols.sentAtCol;
-  campaign.draftIdColIndex = cols.draftIdCol;
+  // Load today's sent count for all senders in the pool
+  if (campaign.senders.length > 0) {
+    for (const s of campaign.senders) {
+      s.sentToday = await getSenderDailySent(s.email);
+    }
+  }
+
+  // Ensure Status / Sent At (and Sent From / Attachment Sent if multi-account) columns
+  const cols = await ensureStatusColumns(sheetId, sheetName, headers, isMulti);
+  campaign.statusColIndex     = cols.statusCol;
+  campaign.sentAtColIndex     = cols.sentAtCol;
+  campaign.draftIdColIndex    = cols.draftIdCol;
+  campaign.sentFromColIndex   = cols.sentFromCol;
+  campaign.attachmentColIndex = cols.attachmentCol;
 
   campaign.dailySentCount = await getDailySentCount();
   await persistState();
@@ -631,21 +765,47 @@ async function executeRealtime() {
       }
     }
 
-    // Daily limit guard (stop at 490 to leave headroom)
-    if (campaign.dailySentCount >= 490) {
-      broadcast('error', 'Approaching Gmail daily limit. Campaign paused.');
-      pauseCampaign();
-      continue;
+    // Determine sender for this row
+    let currentSender = null;
+    if (campaign.accountMode === 'multi' && campaign.senders.length > 0) {
+      const next = getNextAvailableSender(campaign.senders, campaign.currentSenderIndex);
+      if (!next) {
+        broadcast('error', 'All accounts in the sender pool have reached their daily limit. Campaign paused.');
+        pauseCampaign();
+        continue;
+      }
+      currentSender = next.sender;
+      campaign.currentSenderIndex = next.index;
+    } else if (campaign.senders.length > 0) {
+      currentSender = campaign.senders[0];
+      const limit = currentSender.dailyLimit || (currentSender.isWorkspace ? 2000 : 500);
+      if ((currentSender.sentToday || 0) >= limit - 5) {
+        broadcast('error', 'Approaching Gmail daily limit for active account. Campaign paused.');
+        pauseCampaign();
+        continue;
+      }
+    } else {
+      // Fallback if no sender profile list attached
+      if (campaign.dailySentCount >= 490) {
+        broadcast('error', 'Approaching Gmail daily limit. Campaign paused.');
+        pauseCampaign();
+        continue;
+      }
     }
+
+    // Attachment priority: Sender-specific attachment override → Campaign master attachment
+    const rowAttachment = (currentSender && currentSender.attachment) ? currentSender.attachment : campaign.attachment;
+    const attachmentName = rowAttachment ? rowAttachment.name : '';
 
     try {
       await markRow(row._rowIndex, 'pending');
       broadcast('state');
 
-      const subject = parsePlaceholders(campaign.template.subject, row);
-      const body    = parsePlaceholders(campaign.template.body, row);
+      const subject = parsePlaceholders(campaign.template.subject, row, currentSender);
+      const body    = parsePlaceholders(campaign.template.body, row, currentSender);
+      const customToken = (currentSender && !currentSender.isPrimary && currentSender.token) ? currentSender.token : null;
 
-      await sendEmailViaAPI(email, subject, body, campaign.attachment);
+      await sendEmailViaAPI(email, subject, body, rowAttachment, customToken);
 
       campaign.sentCount++;
       campaign.dailySentCount++;
@@ -655,7 +815,13 @@ async function executeRealtime() {
         if (company) companySentCount[company] = (companySentCount[company] || 0) + 1;
       }
 
-      await markRow(row._rowIndex, 'sent');
+      if (currentSender) {
+        currentSender.sentToday = (currentSender.sentToday || 0) + 1;
+        currentSender.sentCount = (currentSender.sentCount || 0) + 1;
+        await incrementSenderDailySent(currentSender.email);
+      }
+
+      await markRow(row._rowIndex, 'sent', null, currentSender?.email, attachmentName);
       await incrementDailySent();
       broadcast('state');
 
@@ -760,11 +926,27 @@ async function executeBackground() {
       }
     }
 
-    try {
-      const subject = parsePlaceholders(campaign.template.subject, row);
-      const body    = parsePlaceholders(campaign.template.body, row);
+    // Determine sender for this draft
+    let currentSender = null;
+    if (campaign.accountMode === 'multi' && campaign.senders.length > 0) {
+      const next = getNextAvailableSender(campaign.senders, campaign.currentSenderIndex);
+      if (next) {
+        currentSender = next.sender;
+        campaign.currentSenderIndex = next.index;
+      }
+    } else if (campaign.senders.length > 0) {
+      currentSender = campaign.senders[0];
+    }
 
-      const draft = await createDraftViaAPI(email, subject, body, campaign.attachment);
+    const rowAttachment = (currentSender && currentSender.attachment) ? currentSender.attachment : campaign.attachment;
+    const attachmentName = rowAttachment ? rowAttachment.name : '';
+
+    try {
+      const subject = parsePlaceholders(campaign.template.subject, row, currentSender);
+      const body    = parsePlaceholders(campaign.template.body, row, currentSender);
+      const customToken = (currentSender && !currentSender.isPrimary && currentSender.token) ? currentSender.token : null;
+
+      const draft = await createDraftViaAPI(email, subject, body, rowAttachment, customToken);
 
       // Store draft ID in sheet for the Apps Script to pick up
       if (campaign.draftIdColIndex > 0) {
@@ -772,7 +954,7 @@ async function executeBackground() {
                         row._rowIndex, campaign.draftIdColIndex, draft.id);
       }
 
-      await markRow(row._rowIndex, 'queued');
+      await markRow(row._rowIndex, 'queued', null, currentSender?.email, attachmentName);
       queued++;
       seenEmails.add(emailLower);
       if (companyCol) {
@@ -813,7 +995,7 @@ function stopCampaign() {
 
 // ─── Row helpers ─────────────────────────────────────────────────
 
-async function markRow(rowIndex, status, errorMsg) {
+async function markRow(rowIndex, status, errorMsg, senderEmail = null, attachmentName = null) {
   await writeCell(campaign.sheetId, campaign.sheetName,
                   rowIndex, campaign.statusColIndex,
                   formatStatus(status, errorMsg));
@@ -821,6 +1003,27 @@ async function markRow(rowIndex, status, errorMsg) {
     await writeCell(campaign.sheetId, campaign.sheetName,
                     rowIndex, campaign.sentAtColIndex,
                     getTimestamp());
+    if (campaign.sentFromColIndex > 0 && senderEmail) {
+      await writeCell(campaign.sheetId, campaign.sheetName,
+                      rowIndex, campaign.sentFromColIndex,
+                      senderEmail);
+    }
+    if (campaign.attachmentColIndex > 0 && attachmentName) {
+      await writeCell(campaign.sheetId, campaign.sheetName,
+                      rowIndex, campaign.attachmentColIndex,
+                      attachmentName);
+    }
+  } else if (status === 'queued') {
+    if (campaign.sentFromColIndex > 0 && senderEmail) {
+      await writeCell(campaign.sheetId, campaign.sheetName,
+                      rowIndex, campaign.sentFromColIndex,
+                      senderEmail);
+    }
+    if (campaign.attachmentColIndex > 0 && attachmentName) {
+      await writeCell(campaign.sheetId, campaign.sheetName,
+                      rowIndex, campaign.attachmentColIndex,
+                      attachmentName);
+    }
   }
 }
 
@@ -880,4 +1083,23 @@ async function incrementDailySent() {
   const r     = await chrome.storage.local.get('dailySent');
   const count = (r.dailySent?.date === today) ? r.dailySent.count : 0;
   await chrome.storage.local.set({ dailySent: { date: today, count: count + 1 } });
+}
+
+async function getSenderDailySent(email) {
+  if (!email) return 0;
+  const key = `dailySent_${email.toLowerCase()}`;
+  const r = await chrome.storage.local.get(key);
+  if (r[key] && r[key].date === new Date().toDateString()) {
+    return r[key].count || 0;
+  }
+  return 0;
+}
+
+async function incrementSenderDailySent(email) {
+  if (!email) return;
+  const today = new Date().toDateString();
+  const key = `dailySent_${email.toLowerCase()}`;
+  const r = await chrome.storage.local.get(key);
+  const count = (r[key]?.date === today) ? (r[key].count || 0) : 0;
+  await chrome.storage.local.set({ [key]: { date: today, count: count + 1 } });
 }

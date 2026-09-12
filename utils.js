@@ -4,16 +4,34 @@
  */
 
 /**
- * Replace {placeholder} tokens in a template with values from row data.
- * Matching is CASE-SENSITIVE: {Company Name} ≠ {company name}.
+ * Replace {placeholder} or {{placeholder}} tokens in a template with values from
+ * sheet row data and dynamic sender profile.
+ * Matching is CASE-SENSITIVE for row data, and supports {Sender.Name}, {Sender.Email},
+ * {Sender.Title}, {Sender.Signature}, {Sender.Phone}.
  *
- * @param {string} template - Template string with {placeholder} syntax
- * @param {Object} rowData  - Column header → cell value map from the sheet row
+ * @param {string} template        - Template string with {placeholder} syntax
+ * @param {Object} rowData         - Column header → cell value map from the sheet row
+ * @param {Object|null} senderProfile - Optional active sender profile
  * @returns {string} Template with placeholders filled in
  */
-function parsePlaceholders(template, rowData) {
-  return template.replace(/\{([^}]+)\}/g, (match, key) => {
-    if (Object.prototype.hasOwnProperty.call(rowData, key)) {
+function parsePlaceholders(template, rowData, senderProfile = null) {
+  if (!template) return '';
+
+  const senderMap = {};
+  if (senderProfile) {
+    senderMap['Sender.Name']      = senderProfile.name || '';
+    senderMap['Sender.Email']     = senderProfile.email || '';
+    senderMap['Sender.Title']     = senderProfile.title || '';
+    senderMap['Sender.Signature'] = senderProfile.signature || '';
+    senderMap['Sender.Phone']     = senderProfile.phone || '';
+  }
+
+  return template.replace(/\{+([^}]+)\}+/g, (match, rawKey) => {
+    const key = rawKey.trim();
+    if (senderProfile && Object.prototype.hasOwnProperty.call(senderMap, key)) {
+      return senderMap[key];
+    }
+    if (rowData && Object.prototype.hasOwnProperty.call(rowData, key)) {
       const val = rowData[key];
       return (val !== undefined && val !== null) ? String(val).trim() : '';
     }

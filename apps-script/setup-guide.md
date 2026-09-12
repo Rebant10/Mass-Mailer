@@ -62,4 +62,5 @@ All campaign settings (status, dates, active days of week, business hours, batch
 4. **Safety Guards**:
    - Automatically prevents duplicate sends to the same email address.
    - Enforces company-level email limits (leaving capped contacts clean and un-sent for future outreach).
+   - Automatically logs delivery timestamps (`Sent At`) and active sender account (`Sent From`).
    - Halts immediately if daily limits are approached.

@@ -14,6 +14,8 @@ let lastFocused  = null;   // last focused input/textarea (for placeholder inser
 let delayConfig  = { min: 10000, max: 20000 };
 let sendingMode  = 'realtime';
 let accountInfo  = null;   // { email, accountType, isWorkspace, dailyLimitRealtime, dailyLimitCloud }
+let accountMode  = 'single'; // 'single' or 'multi'
+let senderPool   = [];       // Array of sender profile objects
 
 // ─── DOM refs ────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -27,18 +29,37 @@ const els = {
   dailyCount:      $('dailyCount'),
 
   // Step 1
-  sheetUrl:    $('sheetUrl'),
-  connectBtn:  $('connectBtn'),
-  sheetInfo:   $('sheetInfo'),
-  tabSelect:   $('tabSelect'),
-  rowCount:    $('rowCount'),
-  columnChips: $('columnChips'),
-  toStep2:     $('toStep2'),
+  sheetUrl:           $('sheetUrl'),
+  connectBtn:         $('connectBtn'),
+  sheetInfo:          $('sheetInfo'),
+  disconnectSheetBtn: $('disconnectSheetBtn'),
+  tabSelect:          $('tabSelect'),
+  rowCount:           $('rowCount'),
+  columnChips:        $('columnChips'),
+  toStep2:            $('toStep2'),
+
+  // Sender Accounts (Step 1)
+  accountModeSingle:          $('accountModeSingle'),
+  accountModeMulti:           $('accountModeMulti'),
+  singleAccountInfo:          $('singleAccountInfo'),
+  singleAccountEmail:         $('singleAccountEmail'),
+  multiAccountPoolSection:    $('multiAccountPoolSection'),
+  senderPoolList:             $('senderPoolList'),
+  addSenderBtn:               $('addSenderBtn'),
+  oauthSetupBox:              $('oauthSetupBox'),
+  toggleOauthHelpBtn:         $('toggleOauthHelpBtn'),
+  oauthHelpContent:           $('oauthHelpContent'),
+  extensionRedirectUriInput:  $('extensionRedirectUriInput'),
+  copyRedirectUriBtn:         $('copyRedirectUriBtn'),
+  webClientIdInput:           $('webClientIdInput'),
+  saveWebClientIdBtn:         $('saveWebClientIdBtn'),
+  webClientIdSavedNotice:     $('webClientIdSavedNotice'),
 
   // Step 2
   subjectInput:     $('subjectInput'),
   bodyInput:        $('bodyInput'),
   placeholderBar:   $('placeholderBar'),
+  senderChipsBar:   $('senderChipsBar'),
   templateSelect:   $('templateSelect'),
   saveTemplateBtn:  $('saveTemplateBtn'),
   attachmentInput:  $('attachmentInput'),
@@ -86,6 +107,8 @@ const els = {
   limitWarning:         $('limitWarning'),
   companyBreakdownCard: $('companyBreakdownCard'),
   companyBreakdownList: $('companyBreakdownList'),
+  sendersBreakdownCard: $('sendersBreakdownCard'),
+  sendersBreakdownList: $('sendersBreakdownList'),
   startCampaignBtn:     $('startCampaignBtn'),
 
   // Dashboard
@@ -117,12 +140,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadTemplates();
   await refreshDailyCount();
   await detectAccount();
+  await initSenderAccounts();
 
-  // Restore last connected sheet URL if available
+  // Restore last connected sheet URL and auto-connect so the doc stays until removed
   try {
     const stored = await chrome.storage.local.get('lastConnectedSheetUrl');
-    if (stored.lastConnectedSheetUrl && els.sheetUrl && !els.sheetUrl.value) {
-      els.sheetUrl.value = stored.lastConnectedSheetUrl;
+    if (stored.lastConnectedSheetUrl) {
+      if (els.sheetUrl && !els.sheetUrl.value) {
+        els.sheetUrl.value = stored.lastConnectedSheetUrl;
+      }
+      await connectSheet(true /* silent */);
     }
   } catch {}
 });
@@ -157,13 +184,67 @@ function wireEvents() {
   els.syncBtn.addEventListener('click', syncSheet);
 
   // ── Step navigation ──
-  $('connectBtn').addEventListener('click', connectSheet);
+  $('connectBtn').addEventListener('click', () => connectSheet(false));
+  if (els.disconnectSheetBtn) {
+    els.disconnectSheetBtn.addEventListener('click', disconnectSheet);
+  }
   $('toStep2').addEventListener('click',    () => goToStep(2));
   $('backToStep1').addEventListener('click', () => goToStep(1));
   $('toStep3').addEventListener('click',    () => goToStep(3));
   $('backToStep2').addEventListener('click', () => goToStep(2));
   $('toStep4').addEventListener('click',    () => { buildPreview(); goToStep(4); });
   $('backToStep3').addEventListener('click', () => goToStep(3));
+
+  // ── Sender accounts & multi-pool mode ──
+  if (els.accountModeSingle) {
+    els.accountModeSingle.addEventListener('click', () => setAccountMode('single'));
+  }
+  if (els.accountModeMulti) {
+    els.accountModeMulti.addEventListener('click', () => setAccountMode('multi'));
+  }
+  if (els.addSenderBtn) {
+    els.addSenderBtn.addEventListener('click', addSenderAccount);
+  }
+  if (els.copyRedirectUriBtn) {
+    els.copyRedirectUriBtn.addEventListener('click', () => {
+      const uri = (els.extensionRedirectUriInput ? els.extensionRedirectUriInput.value : '') || chrome.identity.getRedirectURL();
+      navigator.clipboard.writeText(uri).then(() => {
+        toast('Redirect URI copied to clipboard!', 'success');
+      }).catch(() => {
+        toast('Could not copy automatically. Please select and copy.', 'error');
+      });
+    });
+  }
+  if (els.saveWebClientIdBtn) {
+    els.saveWebClientIdBtn.addEventListener('click', async () => {
+      const val = (els.webClientIdInput ? els.webClientIdInput.value : '').trim();
+      if (!val) {
+        toast('Please enter your Web Application Client ID.', 'error');
+        return;
+      }
+      await chrome.storage.local.set({ webClientId: val });
+      if (els.webClientIdSavedNotice) {
+        els.webClientIdSavedNotice.classList.remove('hidden');
+        setTimeout(() => els.webClientIdSavedNotice?.classList.add('hidden'), 3500);
+      }
+      toast('Web Client ID saved successfully!', 'success');
+    });
+  }
+  if (els.toggleOauthHelpBtn) {
+    els.toggleOauthHelpBtn.addEventListener('click', () => {
+      if (els.oauthHelpContent) {
+        const isHidden = els.oauthHelpContent.classList.toggle('hidden');
+        els.toggleOauthHelpBtn.textContent = isHidden ? 'Instructions ▾' : 'Hide ▴';
+      }
+    });
+  }
+  if (els.senderChipsBar) {
+    els.senderChipsBar.querySelectorAll('.chip-sender').forEach(chip => {
+      chip.addEventListener('click', () => {
+        insertPlaceholder(chip.dataset.col);
+      });
+    });
+  }
 
   // ── Sheet tab change ──
   els.tabSelect.addEventListener('change', switchTab);
@@ -272,12 +353,17 @@ function showDashboard() {
 //  STEP 1 — CONNECT SHEET
 // ═══════════════════════════════════════════════════════════════════
 
-async function connectSheet() {
+async function connectSheet(silent = false) {
   const url = els.sheetUrl.value.trim();
-  if (!url) { toast('Please enter a Google Sheets URL.', 'error'); return; }
+  if (!url) {
+    if (!silent) toast('Please enter a Google Sheets URL.', 'error');
+    return;
+  }
 
-  els.connectBtn.disabled = true;
-  els.connectBtn.textContent = 'Connecting…';
+  if (!silent) {
+    els.connectBtn.disabled = true;
+    els.connectBtn.textContent = 'Connecting…';
+  }
 
   try {
     // Authenticate first
@@ -291,14 +377,24 @@ async function connectSheet() {
     sheetData = res.data;
     renderSheetInfo();
     await refreshDailyCount();
-    chrome.storage.local.set({ lastConnectedSheetUrl: url }).catch(() => {});
-    toast('Sheet connected!', 'success');
+    await chrome.storage.local.set({ lastConnectedSheetUrl: url });
+    if (!silent) toast('Sheet connected!', 'success');
   } catch (err) {
-    toast(err.message || 'Failed to connect sheet.', 'error');
+    if (!silent) toast(err.message || 'Failed to connect sheet.', 'error');
   } finally {
     els.connectBtn.disabled = false;
     els.connectBtn.textContent = 'Connect';
   }
+}
+
+async function disconnectSheet() {
+  sheetData = null;
+  if (els.sheetUrl) els.sheetUrl.value = '';
+  if (els.sheetInfo) els.sheetInfo.classList.add('hidden');
+  await chrome.storage.local.remove('lastConnectedSheetUrl');
+  refreshCompanyLimitsUI();
+  await refreshDailyCount();
+  toast('Sheet link removed.', 'info');
 }
 
 function renderSheetInfo() {
@@ -551,9 +647,41 @@ async function detectAccount() {
     if (info) {
       accountInfo = info;
       if (els.accountType) els.accountType.textContent = accountInfo.accountType;
+      if (els.singleAccountEmail) {
+        els.singleAccountEmail.textContent = accountInfo.email || '—';
+      }
       if (els.accountBadge) {
         els.accountBadge.classList.toggle('personal', !accountInfo.isWorkspace);
         els.accountBadge.classList.toggle('workspace', !!accountInfo.isWorkspace);
+      }
+
+      // Sync active account into senderPool as primary
+      let primary = senderPool.find(s => s.isPrimary);
+      if (!primary && accountInfo.email) {
+        primary = {
+          id: 'sender_primary',
+          email: accountInfo.email,
+          name: accountInfo.email.split('@')[0],
+          title: '',
+          signature: '',
+          phone: '',
+          isWorkspace: !!accountInfo.isWorkspace,
+          accountType: accountInfo.accountType || (accountInfo.isWorkspace ? 'Workspace' : 'Personal'),
+          dailyLimit: accountInfo.dailyLimitRealtime || (accountInfo.isWorkspace ? 2000 : 500),
+          isPrimary: true,
+          token: null,
+          attachment: null
+        };
+        senderPool.unshift(primary);
+        saveSenderPool();
+        renderSenderPool();
+      } else if (primary && primary.email !== accountInfo.email) {
+        primary.email = accountInfo.email;
+        primary.isWorkspace = !!accountInfo.isWorkspace;
+        primary.accountType = accountInfo.accountType || (accountInfo.isWorkspace ? 'Workspace' : 'Personal');
+        primary.dailyLimit = accountInfo.dailyLimitRealtime || (accountInfo.isWorkspace ? 2000 : 500);
+        saveSenderPool();
+        renderSenderPool();
       }
     } else {
       if (els.accountType) els.accountType.textContent = 'Ready to connect';
@@ -567,6 +695,17 @@ async function detectAccount() {
 }
 
 function updateQuotaDisplay() {
+  if (accountMode === 'multi' && senderPool.length > 0) {
+    const totalPoolCap = senderPool.reduce((sum, s) => {
+      const limit = s.dailyLimit || (s.isWorkspace ? (sendingMode === 'realtime' ? 2000 : 1500) : (sendingMode === 'realtime' ? 500 : 100));
+      return sum + limit;
+    }, 0);
+    if (els.quotaLabel) {
+      els.quotaLabel.textContent = `Daily Quota (Pool of ${senderPool.length} inboxes: ${totalPoolCap}/day):`;
+    }
+    return;
+  }
+
   const isWorkspace = accountInfo ? accountInfo.isWorkspace : false;
   let limit;
   if (sendingMode === 'realtime') {
@@ -575,6 +714,273 @@ function updateQuotaDisplay() {
   } else {
     limit = isWorkspace ? 1500 : 100;
     if (els.quotaLabel) els.quotaLabel.textContent = `Daily Quota (Cloud: ${limit}/day):`;
+  }
+}
+
+// ── Sender Pool Management ──
+
+function setAccountMode(mode) {
+  accountMode = mode;
+  if (els.accountModeSingle) {
+    els.accountModeSingle.classList.toggle('active', mode === 'single');
+  }
+  if (els.accountModeMulti) {
+    els.accountModeMulti.classList.toggle('active', mode === 'multi');
+  }
+
+  if (els.singleAccountInfo) {
+    els.singleAccountInfo.classList.toggle('hidden', mode !== 'single');
+  }
+  if (els.multiAccountPoolSection) {
+    els.multiAccountPoolSection.classList.toggle('hidden', mode !== 'multi');
+  }
+
+  chrome.storage.local.set({ accountMode: mode }).catch(() => {});
+  updateQuotaDisplay();
+}
+
+async function initSenderAccounts() {
+  try {
+    const redirectUri = chrome.identity.getRedirectURL();
+    if (els.extensionRedirectUriInput) {
+      els.extensionRedirectUriInput.value = redirectUri;
+    }
+
+    const stored = await chrome.storage.local.get(['accountMode', 'senderPool', 'webClientId']);
+    if (stored.accountMode) {
+      accountMode = stored.accountMode;
+    }
+    if (stored.webClientId && els.webClientIdInput) {
+      els.webClientIdInput.value = stored.webClientId;
+    }
+    if (Array.isArray(stored.senderPool) && stored.senderPool.length > 0) {
+      senderPool = stored.senderPool;
+    } else if (accountInfo && accountInfo.email) {
+      senderPool = [{
+        id: 'sender_primary',
+        email: accountInfo.email,
+        name: accountInfo.email.split('@')[0],
+        title: '',
+        signature: '',
+        phone: '',
+        isWorkspace: !!accountInfo.isWorkspace,
+        accountType: accountInfo.accountType || (accountInfo.isWorkspace ? 'Workspace' : 'Personal'),
+        dailyLimit: accountInfo.dailyLimitRealtime || (accountInfo.isWorkspace ? 2000 : 500),
+        isPrimary: true,
+        token: null,
+        attachment: null
+      }];
+      await saveSenderPool();
+    }
+  } catch (e) {
+    console.warn('Failed to load sender accounts:', e);
+  }
+
+  setAccountMode(accountMode);
+  renderSenderPool();
+}
+
+async function saveSenderPool() {
+  try {
+    await chrome.storage.local.set({ senderPool });
+  } catch (e) {
+    console.warn('Failed to save sender pool:', e);
+  }
+}
+
+function renderSenderPool() {
+  if (!els.senderPoolList) return;
+  els.senderPoolList.innerHTML = '';
+
+  if (senderPool.length === 0) {
+    els.senderPoolList.innerHTML = `<div class="empty-state" style="padding:12px;font-size:.78rem;color:var(--text-dim);text-align:center;">No accounts in pool yet. Click below to add an account.</div>`;
+    return;
+  }
+
+  senderPool.forEach(sender => {
+    const card = document.createElement('div');
+    card.className = 'sender-card';
+    card.dataset.senderId = sender.id;
+
+    const badgeClass = sender.isWorkspace ? 'workspace' : 'personal';
+    const badgeText  = sender.accountType || (sender.isWorkspace ? 'Workspace' : 'Personal');
+    const limitLabel = sender.dailyLimit || (sender.isWorkspace ? 2000 : 500);
+
+    const canRemove = !sender.isPrimary;
+    const removeHtml = canRemove
+      ? `<button type="button" class="btn-remove-sender" title="Remove Account" data-id="${sender.id}">✕</button>`
+      : `<span style="font-size:.65rem;color:var(--primary-light);font-weight:600;">PRIMARY</span>`;
+
+    const attachHtml = sender.attachment
+      ? `<span>📎 <span class="sender-attachment-name" title="${escapeHtml(sender.attachment.name)}">${escapeHtml(sender.attachment.name)}</span></span>
+         <button type="button" class="btn btn-ghost btn-sm btn-clear-sender-attach" data-id="${sender.id}" style="padding:2px 6px;font-size:.68rem;">Remove</button>`
+      : `<span style="color:var(--text-dim);font-size:.72rem;">📄 Using master attachment</span>
+         <label class="btn btn-ghost btn-sm sender-attach-btn" style="padding:2px 8px;font-size:.68rem;cursor:pointer;">
+           Attach Custom CV/Resume
+           <input type="file" class="hidden sender-file-input" data-id="${sender.id}">
+         </label>`;
+
+    card.innerHTML = `
+      <div class="sender-card-top">
+        <div class="sender-email-info">
+          <span class="sender-email-text">${escapeHtml(sender.email)}</span>
+          <span class="sender-badge ${badgeClass}">${badgeText}</span>
+          <span style="font-size:.68rem;color:var(--text-dim);">(${limitLabel}/day)</span>
+        </div>
+        ${removeHtml}
+      </div>
+
+      <div class="sender-fields-grid">
+        <div class="sender-field-col">
+          <label class="sender-field-label">Full Name {Sender.Name}</label>
+          <input type="text" class="sender-input-sm sender-name-input" placeholder="e.g. Alice Johnson" value="${escapeHtml(sender.name || '')}">
+        </div>
+        <div class="sender-field-col">
+          <label class="sender-field-label">Job Title {Sender.Title}</label>
+          <input type="text" class="sender-input-sm sender-title-input" placeholder="e.g. Software Engineer" value="${escapeHtml(sender.title || '')}">
+        </div>
+        <div class="sender-field-col">
+          <label class="sender-field-label">Phone {Sender.Phone}</label>
+          <input type="text" class="sender-input-sm sender-phone-input" placeholder="e.g. +1 555-0199" value="${escapeHtml(sender.phone || '')}">
+        </div>
+        <div class="sender-field-col" style="grid-column: 1 / -1;">
+          <label class="sender-field-label">Signature Block {Sender.Signature}</label>
+          <textarea class="sender-input-sm sender-sig-input" rows="2" placeholder="Best regards,&#10;Alice">${escapeHtml(sender.signature || '')}</textarea>
+        </div>
+      </div>
+
+      <div class="sender-attachment-row">
+        ${attachHtml}
+      </div>
+    `;
+
+    // Event listeners for card inputs
+    const nameInput  = card.querySelector('.sender-name-input');
+    const titleInput = card.querySelector('.sender-title-input');
+    const phoneInput = card.querySelector('.sender-phone-input');
+    const sigInput   = card.querySelector('.sender-sig-input');
+
+    nameInput?.addEventListener('input', e => {
+      sender.name = e.target.value;
+      saveSenderPool();
+    });
+    titleInput?.addEventListener('input', e => {
+      sender.title = e.target.value;
+      saveSenderPool();
+    });
+    phoneInput?.addEventListener('input', e => {
+      sender.phone = e.target.value;
+      saveSenderPool();
+    });
+    sigInput?.addEventListener('input', e => {
+      sender.signature = e.target.value;
+      saveSenderPool();
+    });
+
+    // Remove sender account
+    const rmBtn = card.querySelector('.btn-remove-sender');
+    rmBtn?.addEventListener('click', () => removeSenderAccount(sender.id));
+
+    // Custom attachment file input
+    const fileInput = card.querySelector('.sender-file-input');
+    fileInput?.addEventListener('change', e => {
+      handleSenderAttachment(sender.id, e.target.files[0]);
+    });
+
+    // Clear custom attachment
+    const clearAttachBtn = card.querySelector('.btn-clear-sender-attach');
+    clearAttachBtn?.addEventListener('click', () => clearSenderAttachment(sender.id));
+
+    els.senderPoolList.appendChild(card);
+  });
+}
+
+async function addSenderAccount() {
+  const stored = await chrome.storage.local.get('webClientId');
+  const webClientId = (stored.webClientId || (els.webClientIdInput ? els.webClientIdInput.value.trim() : '')).trim();
+
+  if (!webClientId) {
+    if (els.oauthHelpContent) els.oauthHelpContent.classList.remove('hidden');
+    if (els.toggleOauthHelpBtn) els.toggleOauthHelpBtn.textContent = 'Hide ▴';
+    if (els.webClientIdInput) els.webClientIdInput.focus();
+    toast('Google requires a Web Client ID to connect inboxes. Follow the 1-min instructions above!', 'warning');
+    return;
+  }
+
+  if (!els.addSenderBtn) return;
+  els.addSenderBtn.disabled = true;
+  const origText = els.addSenderBtn.textContent;
+  els.addSenderBtn.textContent = 'Connecting Account…';
+
+  try {
+    const res = await sendBg('addGoogleAccount', { webClientId });
+    if (!res || !res.success || !res.account) {
+      throw new Error(res?.error || 'Authentication cancelled or failed.');
+    }
+
+    const acc = res.account;
+    const existingIndex = senderPool.findIndex(s => s.email.toLowerCase() === acc.email.toLowerCase());
+    if (existingIndex !== -1) {
+      // Refresh credentials
+      senderPool[existingIndex].token = acc.token;
+      senderPool[existingIndex].tokenExpiresAt = acc.tokenExpiresAt;
+      toast(`Refreshed credentials for ${acc.email}`, 'success');
+    } else {
+      senderPool.push(acc);
+      toast(`Account ${acc.email} (${acc.accountType}) added to pool!`, 'success');
+    }
+
+    await saveSenderPool();
+    renderSenderPool();
+    updateQuotaDisplay();
+  } catch (err) {
+    toast(err.message || 'Could not add Google Account.', 'error');
+  } finally {
+    els.addSenderBtn.disabled = false;
+    els.addSenderBtn.textContent = origText;
+  }
+}
+
+function removeSenderAccount(senderId) {
+  const idx = senderPool.findIndex(s => s.id === senderId);
+  if (idx !== -1) {
+    const email = senderPool[idx].email;
+    senderPool.splice(idx, 1);
+    saveSenderPool();
+    renderSenderPool();
+    updateQuotaDisplay();
+    toast(`Removed ${email} from pool.`, 'info');
+  }
+}
+
+function handleSenderAttachment(senderId, file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const base64Full = reader.result;
+    const base64Data = base64Full.split(',')[1];
+    const s = senderPool.find(x => x.id === senderId);
+    if (s) {
+      s.attachment = {
+        name: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        base64Data
+      };
+      saveSenderPool();
+      renderSenderPool();
+      toast(`Custom attachment set for ${s.email}`, 'info');
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearSenderAttachment(senderId) {
+  const s = senderPool.find(x => x.id === senderId);
+  if (s) {
+    s.attachment = null;
+    saveSenderPool();
+    renderSenderPool();
+    toast(`Cleared custom attachment for ${s.email}`, 'info');
   }
 }
 
@@ -841,14 +1247,25 @@ function buildPreview() {
   // Render first 3 preview emails from willSendRows (or unsent if empty)
   const previewSlice = (willSendRows.length ? willSendRows : unsent).slice(0, 3);
   els.previewEmails.innerHTML = previewSlice.map((row, i) => {
-    const filledSubject = parsePlaceholders(subject, row);
-    const filledBody    = parsePlaceholders(body, row);
+    const currentSender = (accountMode === 'multi' && senderPool.length > 0)
+      ? senderPool[i % senderPool.length]
+      : (senderPool[0] || null);
+
+    const filledSubject = parsePlaceholders(subject, row, currentSender);
+    const filledBody    = parsePlaceholders(body, row, currentSender);
     const email         = emailCol ? row[emailCol] : '(no email column)';
-    const attachLabel   = attachment ? `<div class="preview-attachment">📎 ${attachment.name}</div>` : '';
+    const effectiveAttach = (currentSender && currentSender.attachment) ? currentSender.attachment : attachment;
+    const attachLabel   = effectiveAttach
+      ? `<div class="preview-attachment">📎 ${escapeHtml(effectiveAttach.name)}${currentSender?.attachment ? ' <em>(Account CV)</em>' : ''}</div>`
+      : '';
+    const fromLabel     = currentSender
+      ? `<div class="preview-sender" style="font-size:0.75rem;color:var(--text-dim);margin-bottom:6px;">From: <strong style="color:var(--text);">${escapeHtml(currentSender.name || currentSender.email)}</strong> &lt;${escapeHtml(currentSender.email)}&gt;</div>`
+      : '';
 
     return `
       <div class="preview-email">
         <div class="preview-label">Email ${i + 1}</div>
+        ${fromLabel}
         <div class="preview-to">To: ${escapeHtml(email || '')}</div>
         <div class="preview-subject">${escapeHtml(filledSubject)}</div>
         <div class="preview-body">${escapeHtml(filledBody)}</div>
@@ -900,6 +1317,35 @@ function buildPreview() {
     if (els.companyBreakdownCard) els.companyBreakdownCard.classList.add('hidden');
   }
 
+  // Senders Pool Breakdown card (Step 4)
+  if (accountMode === 'multi' && senderPool.length > 0) {
+    if (els.sendersBreakdownCard) els.sendersBreakdownCard.classList.remove('hidden');
+    if (els.sendersBreakdownList) {
+      const totalToSend = willSendRows.length;
+      const perSenderCount = Math.floor(totalToSend / senderPool.length);
+      const remainder = totalToSend % senderPool.length;
+
+      els.sendersBreakdownList.innerHTML = senderPool.map((s, idx) => {
+        const assigned = perSenderCount + (idx < remainder ? 1 : 0);
+        const badgeClass = s.isWorkspace ? 'workspace' : 'personal';
+        const attachInfo = s.attachment ? `📎 ${s.attachment.name}` : '(master attachment)';
+        return `
+          <div class="sender-breakdown-row">
+            <div class="sender-breakdown-email">
+              <span>${escapeHtml(s.email)}</span>
+              <span class="sender-badge ${badgeClass}">${s.accountType || (s.isWorkspace ? 'Workspace' : 'Personal')}</span>
+            </div>
+            <div class="sender-breakdown-stat">
+              <strong>${assigned}</strong> emails <span style="color:var(--text-dim);font-size:.7rem;">(Cap: ${s.dailyLimit || (s.isWorkspace ? 2000 : 500)}/day | ${escapeHtml(attachInfo)})</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+  } else {
+    if (els.sendersBreakdownCard) els.sendersBreakdownCard.classList.add('hidden');
+  }
+
   // Daily limit warning
   getDailyCount().then(count => {
     const isWorkspace = accountInfo ? accountInfo.isWorkspace : false;
@@ -934,7 +1380,9 @@ async function startCampaign() {
         mode:          sendingMode,
         delay:         delayConfig,
         companyLimits,
-        schedule
+        schedule,
+        accountMode,
+        senders:       senderPool
       }
     });
     showDashboard();
@@ -1114,20 +1562,29 @@ function showCancellationModal(details = {}) {
 
 function resetToStep1() {
   stopDashboardPolling();
-  sheetData   = null;
-  attachment  = null;
   currentStep = 1;
-  els.sheetUrl.value       = '';
+  attachment  = null;
   els.templateSelect.value = '';
   els.subjectInput.value   = '';
   els.bodyInput.value      = '';
-  els.sheetInfo.classList.add('hidden');
   if (els.companyLimitsList) els.companyLimitsList.innerHTML = '';
   if (els.duplicateWarning) els.duplicateWarning.classList.add('hidden');
   if (els.companyBreakdownCard) els.companyBreakdownCard.classList.add('hidden');
   if (els.stopCloudBtn) els.stopCloudBtn.classList.add('hidden');
   clearAttachment();
   els.startCampaignBtn.disabled = false;
+
+  // Keep sheet link persistent until user explicitly clicks remove
+  chrome.storage.local.get('lastConnectedSheetUrl').then(stored => {
+    if (stored.lastConnectedSheetUrl) {
+      if (els.sheetUrl) els.sheetUrl.value = stored.lastConnectedSheetUrl;
+      if (sheetData) renderSheetInfo();
+    } else {
+      if (els.sheetUrl) els.sheetUrl.value = '';
+      if (els.sheetInfo) els.sheetInfo.classList.add('hidden');
+    }
+  });
+
   goToStep(1);
 }
 

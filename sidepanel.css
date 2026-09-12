@@ -716,3 +716,229 @@ select option:hover {
   font-size: .72rem; color: var(--text-muted); margin-top: 6px;
 }
 
+/* ─── Senders Pool & Multi-Account ────────────────────────── */
+.sender-config-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-mode-toggle {
+  display: flex;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.mode-toggle-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.mode-toggle-btn.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(99, 102, 241, 0.4);
+}
+
+.sender-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.sender-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--transition);
+}
+
+.sender-card:hover {
+  border-color: var(--border-focus);
+}
+
+.sender-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sender-email-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sender-email-text {
+  font-size: .8rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sender-badge {
+  font-size: .65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.sender-badge.workspace {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--primary-light);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.sender-badge.personal {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.btn-remove-sender {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: .9rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color var(--transition);
+}
+
+.btn-remove-sender:hover {
+  color: var(--danger);
+}
+
+.sender-fields-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.sender-field-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sender-field-label {
+  font-size: .68rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.sender-input-sm {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: .75rem;
+  padding: 5px 8px;
+}
+
+.sender-input-sm:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.sender-attachment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xs);
+  padding: 6px 8px;
+  font-size: .72rem;
+}
+
+.sender-attachment-name {
+  color: var(--primary-light);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+
+.sender-attach-btn {
+  font-size: .7rem;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+/* ─── Sender Chips in Step 2 ───────────────────────────────── */
+.sender-chips-bar {
+  margin-top: 6px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+
+.chip.chip-sender {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #34d399;
+}
+
+.chip.chip-sender:hover {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: #34d399;
+  transform: translateY(-1px);
+}
+
+/* ─── Senders Breakdown in Step 4 ──────────────────────────── */
+.senders-breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sender-breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: .78rem;
+}
+
+.sender-breakdown-email {
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sender-breakdown-stat {
+  color: var(--primary-light);
+  font-weight: 700;
+}
+
+

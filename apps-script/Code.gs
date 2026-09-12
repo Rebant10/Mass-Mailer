@@ -109,11 +109,12 @@ function processQueue() {
   const headers = data[0].map(h => String(h).trim());
 
   // Find column indexes
-  const statusIdx  = findCol(headers, ['Status']);
-  const sentAtIdx  = findCol(headers, ['Sent At', 'SentAt', 'Sent Date']);
-  const draftIdIdx = findCol(headers, ['Draft ID', 'DraftId']);
-  const emailIdx   = findCol(headers, ['Email', 'email', 'E-mail', 'Mail', 'Email Address']);
-  const compIdx    = findCol(headers, ['Company', 'company', 'Company Name', 'Organization', 'Employer']);
+  const statusIdx   = findCol(headers, ['Status']);
+  const sentAtIdx   = findCol(headers, ['Sent At', 'SentAt', 'Sent Date']);
+  const draftIdIdx  = findCol(headers, ['Draft ID', 'DraftId']);
+  const emailIdx    = findCol(headers, ['Email', 'email', 'E-mail', 'Mail', 'Email Address']);
+  const compIdx     = findCol(headers, ['Company', 'company', 'Company Name', 'Organization', 'Employer']);
+  const sentFromIdx = findCol(headers, ['Sent From', 'SentFrom', 'Sender Email', 'Sent By']);
 
   if (statusIdx === -1) {
     Logger.log('❌ "Status" column not found. Connect the sheet in the extension first.');
@@ -232,6 +233,12 @@ function processQueue() {
       if (sentAtIdx !== -1) {
         const nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
         sheet.getRange(rowNum, sentAtIdx + 1).setValue(nowStr);
+      }
+      if (sentFromIdx !== -1) {
+        const activeSender = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+        if (activeSender) {
+          sheet.getRange(rowNum, sentFromIdx + 1).setValue(activeSender);
+        }
       }
 
       sentInThisRun++;
@@ -366,9 +373,24 @@ function findCol(headers, candidates) {
   return -1;
 }
 
-function parsePlaceholders(template, rowData) {
-  return template.replace(/\{([^}]+)\}/g, (match, key) => {
-    if (Object.prototype.hasOwnProperty.call(rowData, key)) {
+function parsePlaceholders(template, rowData, senderProfile) {
+  if (!template) return '';
+  return template.replace(/\{\{?([A-Za-z0-9_.\s]+)\}?\}/g, (match, rawKey) => {
+    const key = rawKey.trim();
+    if (key.startsWith('Sender.')) {
+      const field = key.slice(7).toLowerCase();
+      const profile = senderProfile || {
+        email: Session.getActiveUser().getEmail() || '',
+        name: (Session.getActiveUser().getEmail() || '').split('@')[0]
+      };
+      if (field === 'name') return profile.name || profile.email || '';
+      if (field === 'email') return profile.email || '';
+      if (field === 'title') return profile.title || '';
+      if (field === 'signature') return profile.signature || '';
+      if (field === 'phone') return profile.phone || '';
+      return profile[key.slice(7)] || '';
+    }
+    if (rowData && Object.prototype.hasOwnProperty.call(rowData, key)) {
       const val = rowData[key];
       return (val !== undefined && val !== null) ? String(val).trim() : '';
     }

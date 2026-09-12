@@ -72,7 +72,10 @@
 
     <!-- Shown after successful connection -->
     <div class="card hidden" id="sheetInfo">
-      <h3 class="card-subtitle">✅ Sheet Connected</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 class="card-subtitle" style="margin:0;">✅ Sheet Connected</h3>
+        <button type="button" id="disconnectSheetBtn" class="btn btn-ghost btn-sm" style="color:var(--text-dim);font-size:0.7rem;padding:2px 6px;">✕ Remove / Change</button>
+      </div>
       <div class="sheet-meta">
         <div class="meta-item">
           <span class="meta-label">Tab:</span>
@@ -87,6 +90,66 @@
       <div class="columns-section">
         <h4>Detected Columns (use as placeholders):</h4>
         <div class="column-chips" id="columnChips"></div>
+      </div>
+
+      <!-- Senders Configuration (Step 1) -->
+      <div class="sender-config-section">
+        <div class="card-header-row">
+          <h4 style="margin:0;font-size:.9rem;">👥 Sender Accounts</h4>
+          <div class="account-mode-toggle" id="accountModeToggle">
+            <button type="button" class="mode-toggle-btn active" id="accountModeSingle" data-mode="single">👤 Single</button>
+            <button type="button" class="mode-toggle-btn" id="accountModeMulti" data-mode="multi">👥 Multi-Pool</button>
+          </div>
+        </div>
+
+        <div id="singleAccountInfo" class="single-account-info">
+          <p class="field-hint" style="margin:6px 0 0 0;">Using active account: <strong id="singleAccountEmail">—</strong></p>
+        </div>
+
+        <div id="multiAccountPoolSection" class="multi-account-pool-section hidden">
+          <p class="field-hint" style="margin:6px 0 10px 0;">Rotate sends across multiple inboxes. Customize identity and resume per account.</p>
+
+          <!-- OAuth Setup Box for Web Auth Flow -->
+          <div class="oauth-setup-box" id="oauthSetupBox" style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:var(--radius-sm);padding:10px;margin-bottom:10px;font-size:0.75rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-weight:700;color:var(--primary-light);">⚙️ Multi-Account OAuth Setup</span>
+              <button type="button" id="toggleOauthHelpBtn" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:0.68rem;">Instructions ▾</button>
+            </div>
+            
+            <div id="oauthHelpContent" class="hidden" style="margin-top:8px;line-height:1.5;color:var(--text-dim);">
+              <p style="margin:0 0 6px 0;">Google requires a <strong>Web application</strong> OAuth Client ID to authenticate multiple inboxes into an extension:</p>
+              <ol style="margin:0 0 8px 16px;padding:0;">
+                <li>Copy your Extension Redirect URI below.</li>
+                <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--primary-light);">Google Cloud Console &rarr; Credentials</a>.</li>
+                <li>Click <strong>Create Credentials</strong> &rarr; <strong>OAuth client ID</strong> &rarr; Type: <strong>Web application</strong>.</li>
+                <li>Under <strong>Authorized redirect URIs</strong>, paste the copied URI and click <strong>Create</strong>.</li>
+                <li>Paste the Web Client ID below and click <strong>Save</strong>.</li>
+              </ol>
+            </div>
+
+            <div style="margin-top:8px;">
+              <label style="display:block;font-size:0.68rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;margin-bottom:2px;">Extension Redirect URI (Add to Google Console):</label>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input type="text" id="extensionRedirectUriInput" readonly class="input" style="font-size:0.72rem;padding:4px 6px;background:rgba(0,0,0,0.3);color:var(--text-muted);user-select:all;" value="">
+                <button type="button" id="copyRedirectUriBtn" class="btn btn-ghost btn-sm" style="white-space:nowrap;padding:4px 8px;font-size:0.7rem;">📋 Copy</button>
+              </div>
+            </div>
+
+            <div style="margin-top:8px;">
+              <label style="display:block;font-size:0.68rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;margin-bottom:2px;">Web OAuth Client ID:</label>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input type="text" id="webClientIdInput" placeholder="xxxx.apps.googleusercontent.com" class="input" style="font-size:0.72rem;padding:4px 6px;">
+                <button type="button" id="saveWebClientIdBtn" class="btn btn-primary btn-sm" style="white-space:nowrap;padding:4px 8px;font-size:0.7rem;">Save</button>
+              </div>
+              <span id="webClientIdSavedNotice" class="hidden" style="color:#34d399;font-size:0.68rem;margin-top:2px;display:block;">✓ Web Client ID saved!</span>
+            </div>
+          </div>
+
+          <div class="sender-pool-list" id="senderPoolList"></div>
+          <button type="button" class="btn btn-ghost btn-sm btn-full" id="addSenderBtn" style="margin-top:8px;">
+            ➕ Add Google Account to Pool
+          </button>
+        </div>
       </div>
 
       <button id="toStep2" class="btn btn-primary btn-full" style="margin-top:14px">
@@ -128,9 +191,19 @@
         <span class="placeholder-label">Insert:</span>
       </div>
 
+      <!-- Sender Chips (Multi-Account) -->
+      <div class="placeholder-bar sender-chips-bar" id="senderChipsBar">
+        <span class="placeholder-label">Sender Chips:</span>
+        <span class="chip chip-sender" data-col="Sender.Name">👤 {Sender.Name}</span>
+        <span class="chip chip-sender" data-col="Sender.Email">✉️ {Sender.Email}</span>
+        <span class="chip chip-sender" data-col="Sender.Title">🏷️ {Sender.Title}</span>
+        <span class="chip chip-sender" data-col="Sender.Signature">✍️ {Sender.Signature}</span>
+        <span class="chip chip-sender" data-col="Sender.Phone">📞 {Sender.Phone}</span>
+      </div>
+
       <!-- Attachment -->
       <div class="input-group">
-        <label class="label">📎 Attachment (optional)</label>
+        <label class="label">📎 Master Attachment (optional)</label>
         <div class="file-input-wrapper">
           <input type="file" id="attachmentInput" class="file-input">
           <div class="file-display" id="fileDisplay">
@@ -360,6 +433,12 @@
     <div class="card hidden" id="companyBreakdownCard">
       <h2 class="card-title">🏢 Company Cap Breakdown</h2>
       <div id="companyBreakdownList" class="company-breakdown-list"></div>
+    </div>
+
+    <!-- Senders Pool Breakdown (Step 4) -->
+    <div class="card hidden" id="sendersBreakdownCard">
+      <h2 class="card-title">👥 Senders Pool Breakdown</h2>
+      <div id="sendersBreakdownList" class="senders-breakdown-list"></div>
     </div>
 
     <div class="btn-row">
