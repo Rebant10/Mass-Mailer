@@ -979,8 +979,9 @@ function getUnsentCompanies() {
 
   const set = new Set();
   sheetData.rows.forEach(r => {
-    // Only companies with pending/unsent rows
-    if (r['Status'] !== 'Sent ✓') {
+    // Only companies with pending/unsent rows (not already Sent or Queued)
+    const s = String(r['Status'] || '').trim();
+    if (s !== 'Sent ✓' && s !== 'Queued 📋' && s !== 'Pending ⏳') {
       const val = (r[compCol] || '').toString().trim();
       if (val) set.add(val);
     }
@@ -1154,9 +1155,12 @@ function buildPreview() {
   const companyCol = findCompanyCol(sheetData.headers);
   const companyLimits = collectCompanyLimits();
 
-  // Count already-sent
-  const alreadySent = rows.filter(r => r['Status'] === 'Sent ✓').length;
-  const unsent = rows.filter(r => r['Status'] !== 'Sent ✓');
+  // Helper to determine if row is already handled or reserved by scheduler
+  const isHandledOrReserved = s => (s === 'Sent ✓' || s === 'Queued 📋' || s === 'Pending ⏳');
+
+  // Count already-sent and already-reserved rows
+  const alreadySent = rows.filter(r => isHandledOrReserved(String(r['Status'] || '').trim())).length;
+  const unsent = rows.filter(r => !isHandledOrReserved(String(r['Status'] || '').trim()));
 
   // Duplicate email detection among unsent rows
   const unsentEmailCounts = {};
@@ -1181,9 +1185,23 @@ function buildPreview() {
     if (els.duplicateWarning) els.duplicateWarning.classList.add('hidden');
   }
 
-  // Calculate which rows will actually be sent (respecting duplicate guard & company caps)
+  // Pre-seed seen emails & company counts from already Sent/Queued rows to protect caps & avoid duplicates
   const seenEmails = new Set();
   const companySentCount = {};
+  rows.forEach(r => {
+    const s = String(r['Status'] || '').trim();
+    if (isHandledOrReserved(s)) {
+      if (emailCol && r[emailCol]) {
+        const e = String(r[emailCol]).trim().toLowerCase();
+        if (e) seenEmails.add(e);
+      }
+      if (companyCol && r[companyCol]) {
+        const c = String(r[companyCol]).trim() || 'Other';
+        companySentCount[c] = (companySentCount[c] || 0) + 1;
+      }
+    }
+  });
+
   const willSendRows = [];
 
   // Breakdown stats: company -> { totalPending: number, willSend: number, cap: number | 'None' }

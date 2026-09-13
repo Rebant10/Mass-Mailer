@@ -695,21 +695,23 @@ async function executeRealtime() {
 
   const companyCol = findCompanyColumn(campaign.headers);
 
-  // Pre-seed company sent counts from existing rows marked 'Sent ✓'
+  // Pre-seed company sent counts from existing rows marked 'Sent ✓', 'Queued 📋', or 'Pending ⏳'
   const companySentCount = {};
   if (companyCol) {
     for (const r of campaign.rows) {
-      if (r['Status'] === 'Sent ✓') {
+      const s = String(r['Status'] || '').trim();
+      if (s === 'Sent ✓' || s === 'Queued 📋' || s === 'Pending ⏳') {
         const c = (r[companyCol] || '').trim();
         if (c) companySentCount[c] = (companySentCount[c] || 0) + 1;
       }
     }
   }
 
-  // Pre-seed seen emails to protect against duplicates
+  // Pre-seed seen emails to protect against duplicates (including already sent or reserved)
   const seenEmails = new Set();
   for (const r of campaign.rows) {
-    if (r['Status'] === 'Sent ✓') {
+    const s = String(r['Status'] || '').trim();
+    if (s === 'Sent ✓' || s === 'Queued 📋' || s === 'Pending ⏳') {
       const e = (r[emailCol] || '').trim().toLowerCase();
       if (e) seenEmails.add(e);
     }
@@ -728,8 +730,9 @@ async function executeRealtime() {
     campaign.currentIndex = i;
     const row   = campaign.rows[i];
 
-    // Skip rows already sent
-    if (row['Status'] === 'Sent ✓') {
+    // Skip rows already sent or reserved by scheduler
+    const rowStatus = String(row['Status'] || '').trim();
+    if (rowStatus === 'Sent ✓' || rowStatus === 'Queued 📋' || rowStatus === 'Pending ⏳') {
       campaign.skippedCount++;
       broadcast('state');
       continue;
@@ -861,21 +864,23 @@ async function executeBackground() {
 
   const companyCol = findCompanyColumn(campaign.headers);
 
-  // Pre-seed company sent counts from existing rows marked 'Sent ✓'
+  // Pre-seed company sent counts from existing rows marked 'Sent ✓', 'Queued 📋', or 'Pending ⏳'
   const companySentCount = {};
   if (companyCol) {
     for (const r of campaign.rows) {
-      if (r['Status'] === 'Sent ✓') {
+      const s = String(r['Status'] || '').trim();
+      if (s === 'Sent ✓' || s === 'Queued 📋' || s === 'Pending ⏳') {
         const c = (r[companyCol] || '').trim();
         if (c) companySentCount[c] = (companySentCount[c] || 0) + 1;
       }
     }
   }
 
-  // Pre-seed seen emails to protect against duplicates
+  // Pre-seed seen emails to protect against duplicates (including already sent or queued)
   const seenEmails = new Set();
   for (const r of campaign.rows) {
-    if (r['Status'] === 'Sent ✓') {
+    const s = String(r['Status'] || '').trim();
+    if (s === 'Sent ✓' || s === 'Queued 📋' || s === 'Pending ⏳') {
       const e = (r[emailCol] || '').trim().toLowerCase();
       if (e) seenEmails.add(e);
     }
@@ -890,7 +895,8 @@ async function executeBackground() {
     const row = campaign.rows[i];
 
     // Skip already processed rows
-    if (row['Status'] === 'Sent ✓' || row['Status'] === 'Queued 📋') {
+    const rowStatus = String(row['Status'] || '').trim();
+    if (rowStatus === 'Sent ✓' || rowStatus === 'Queued 📋' || rowStatus === 'Pending ⏳') {
       campaign.skippedCount++;
       broadcast('state');
       continue;

@@ -75,6 +75,7 @@
 
 ### 7. ⚡ Real-Time In-Browser Mode
 - **Smart Delays**: Choose presets (**🐇 Fast** `5–8s`, **🐢 Safe** `10–20s`, **🦥 Stealth** `30–60s`) or set custom minimum and maximum delay sliders with natural jitter.
+- **Scheduler-Aware Concurrency**: Automatically skips rows reserved by cloud scheduling (`Queued 📋` or `Pending ⏳`) and pre-seeds company caps / duplicate protections from queued drafts, letting you run Real-Time and Cloud modes side-by-side on the same sheet without overlaps.
 - **Controls**: Pause, resume, or stop on demand.
 
 ---
