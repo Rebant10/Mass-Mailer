@@ -182,11 +182,13 @@ function buildMimeMessage(to, subject, body, attachment = null) {
     message += `${htmlBodyB64}\r\n`;
 
     message += `--${boundaryAlt}--\r\n`;
+    message += `\r\n`;
 
     // Attachment part
+    const cleanName = (attachment.name || 'attachment.pdf').replace(/"/g, '');
     message += `--${boundaryMixed}\r\n`;
-    message += `Content-Type: ${attachment.mimeType}; name="${attachment.name}"\r\n`;
-    message += `Content-Disposition: attachment; filename="${attachment.name}"\r\n`;
+    message += `Content-Type: ${attachment.mimeType || 'application/octet-stream'}; name="${cleanName}"\r\n`;
+    message += `Content-Disposition: attachment; filename="${cleanName}"\r\n`;
     message += `Content-Transfer-Encoding: base64\r\n`;
     message += `\r\n`;
     message += `${wrapBase64(attachment.base64Data)}\r\n`;

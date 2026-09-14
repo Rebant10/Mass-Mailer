@@ -451,7 +451,9 @@ function getNextAvailableSender(senders, lastIndex = -1) {
     const idx = (lastIndex + step) % n;
     const s = senders[idx];
     const sent = s.sentToday || 0;
-    const limit = s.dailyLimit || (s.isWorkspace ? 2000 : 500);
+    const limit = (campaign.mode === 'background')
+      ? (s.isWorkspace ? 1500 : 100)
+      : (s.dailyLimit || (s.isWorkspace ? 2000 : 500));
     if (sent < limit) {
       return { sender: s, index: idx };
     }
@@ -531,6 +533,9 @@ async function writeSheetConfig(sheetId, config) {
       ['batchSize', String(schedule.batchSize || 2)],
       ['delaySeconds', String(schedule.delaySeconds || 5)],
       ['dailyLimit', String(schedule.dailyLimit || 40)],
+      ['accountMode', config.accountMode || 'single'],
+      ['senderCount', String(config.senders?.length || 1)],
+      ['senderProfiles', JSON.stringify((config.senders || []).map(s => ({ email: s.email, name: s.name, title: s.title, signature: s.signature, phone: s.phone })))],
       ['allCompanyLimit', (config.companyLimits?.all !== null && config.companyLimits?.all !== undefined) ? String(config.companyLimits.all) : ''],
       ['companyLimits', JSON.stringify(config.companyLimits?.companies || {})],
       ['lastConfiguredAt', new Date().toISOString()]
@@ -636,16 +641,20 @@ async function stopCloudCampaign(sheetId, targetTab) {
 
 async function startCampaign(config) {
   const { rows, headers, template, attachment,
-          sheetId, sheetName, mode, delay,
+          sheetId, sheetName, mode, delay, sendLimit,
           companyLimits, schedule,
           accountMode, senders } = config;
 
   const isMulti = accountMode === 'multi' && Array.isArray(senders) && senders.length > 0;
 
+  const alreadySent = rows.filter(r => String(r['Status'] || '').trim() === 'Sent ✓').length;
+
   Object.assign(campaign, {
     isRunning: true, isPaused: false,
     currentIndex: 0, totalRows: rows.length,
-    sentCount: 0, failedCount: 0, skippedCount: 0,
+    sentCount: alreadySent, failedCount: 0, skippedCount: 0,
+    sentThisRun: 0,
+    sendLimit: (typeof sendLimit === 'number' && sendLimit > 0) ? sendLimit : null,
     rows, headers, template, attachment,
     sheetId, sheetName, mode, delay,
     accountMode: isMulti ? 'multi' : 'single',
@@ -717,9 +726,19 @@ async function executeRealtime() {
     }
   }
 
+  let sentThisRun = 0;
+  const maxToSend = (typeof campaign.sendLimit === 'number' && campaign.sendLimit > 0)
+    ? campaign.sendLimit
+    : Infinity;
+
   for (let i = campaign.currentIndex; i < campaign.rows.length; i++) {
     // Stopped?
     if (!campaign.isRunning) break;
+
+    // Check if session limit reached
+    if (sentThisRun >= maxToSend) {
+      break;
+    }
 
     // Paused — spin until resumed or stopped
     while (campaign.isPaused) {
@@ -733,8 +752,6 @@ async function executeRealtime() {
     // Skip rows already sent or reserved by scheduler
     const rowStatus = String(row['Status'] || '').trim();
     if (rowStatus === 'Sent ✓' || rowStatus === 'Queued 📋' || rowStatus === 'Pending ⏳') {
-      campaign.skippedCount++;
-      broadcast('state');
       continue;
     }
 
@@ -812,6 +829,8 @@ async function executeRealtime() {
 
       campaign.sentCount++;
       campaign.dailySentCount++;
+      sentThisRun++;
+      campaign.sentThisRun = sentThisRun;
       seenEmails.add(emailLower);
       if (companyCol) {
         const company = (row[companyCol] || '').trim();
@@ -827,6 +846,11 @@ async function executeRealtime() {
       await markRow(row._rowIndex, 'sent', null, currentSender?.email, attachmentName);
       await incrementDailySent();
       broadcast('state');
+
+      // Stop immediately if target limit for this session is reached
+      if (sentThisRun >= maxToSend) {
+        break;
+      }
 
       // Smart delay (skip after last email)
       if (i < campaign.rows.length - 1 && campaign.isRunning && !campaign.isPaused) {
@@ -897,8 +921,6 @@ async function executeBackground() {
     // Skip already processed rows
     const rowStatus = String(row['Status'] || '').trim();
     if (rowStatus === 'Sent ✓' || rowStatus === 'Queued 📋' || rowStatus === 'Pending ⏳') {
-      campaign.skippedCount++;
-      broadcast('state');
       continue;
     }
 
@@ -968,6 +990,9 @@ async function executeBackground() {
         if (company) companySentCount[company] = (companySentCount[company] || 0) + 1;
       }
       broadcast('state');
+
+      // Safe pacing delay (1.2s) to prevent Google anti-bot/rate-limit flagging on consumer accounts
+      await new Promise(r => setTimeout(r, 1200));
     } catch (err) {
       campaign.failedCount++;
       await markRow(row._rowIndex, 'failed', err.message);
@@ -1044,6 +1069,8 @@ function uiState() {
     currentIndex:   campaign.currentIndex,
     totalRows:      campaign.totalRows,
     sentCount:      campaign.sentCount,
+    sentThisRun:    campaign.sentThisRun || 0,
+    sendLimit:      campaign.sendLimit || null,
     failedCount:    campaign.failedCount,
     skippedCount:   campaign.skippedCount,
     dailySentCount: campaign.dailySentCount,

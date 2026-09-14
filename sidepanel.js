@@ -76,6 +76,10 @@ const els = {
   maxDelaySlider:        $('maxDelaySlider'),
   minDelayVal:           $('minDelayVal'),
   maxDelayVal:           $('maxDelayVal'),
+  realtimeSendLimit:     $('realtimeSendLimit'),
+  realtimeSendAllBtn:    $('realtimeSendAllBtn'),
+  realtimeLimitStatus:   $('realtimeLimitStatus'),
+  realtimeLimitPresets:  $('realtimeLimitPresets'),
   cloudScheduleSettings: $('cloudScheduleSettings'),
   schedTypeDates:        $('schedTypeDates'),
   schedTypeDays:         $('schedTypeDays'),
@@ -90,6 +94,7 @@ const els = {
   scheduleBatchSize:     $('scheduleBatchSize'),
   scheduleBatchDelay:    $('scheduleBatchDelay'),
   scheduleDailyLimit:    $('scheduleDailyLimit'),
+  scheduleDailyLimitHint:$('scheduleDailyLimitHint'),
   companyLimitsContainer:$('companyLimitsContainer'),
   companyLimitsList:     $('companyLimitsList'),
   addCompanyLimitBtn:    $('addCompanyLimitBtn'),
@@ -185,8 +190,31 @@ function wireEvents() {
   $('backToStep1').addEventListener('click', () => goToStep(1));
   $('toStep3').addEventListener('click',    () => goToStep(3));
   $('backToStep2').addEventListener('click', () => goToStep(2));
-  $('toStep4').addEventListener('click',    () => { buildPreview(); goToStep(4); });
+  $('toStep4').addEventListener('click', () => {
+    try {
+      buildPreview();
+    } catch (err) {
+      console.error('Error preparing preview:', err);
+    }
+    goToStep(4);
+  });
   $('backToStep3').addEventListener('click', () => goToStep(3));
+
+  // Step indicators clickable
+  if (els.stepIndicator) {
+    els.stepIndicator.querySelectorAll('.step').forEach(stepEl => {
+      stepEl.style.cursor = 'pointer';
+      stepEl.addEventListener('click', () => {
+        const targetStep = parseInt(stepEl.dataset.step, 10);
+        if (targetStep === 4) {
+          try { buildPreview(); } catch (err) { console.error(err); }
+        }
+        if (targetStep >= 1 && targetStep <= 4) {
+          goToStep(targetStep);
+        }
+      });
+    });
+  }
 
   // ── Sender accounts & multi-pool mode ──
   if (els.accountModeSingle) {
@@ -258,7 +286,7 @@ function wireEvents() {
   els.delayPresets.addEventListener('click', e => {
     const btn = e.target.closest('.delay-btn');
     if (!btn) return;
-    document.querySelectorAll('.delay-btn').forEach(b => b.classList.remove('active'));
+    els.delayPresets.querySelectorAll('.delay-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 
     if (btn.dataset.min === 'custom') {
@@ -272,6 +300,43 @@ function wireEvents() {
 
   els.minDelaySlider.addEventListener('input', updateCustomDelay);
   els.maxDelaySlider.addEventListener('input', updateCustomDelay);
+
+  // ── Real-time send limit controls ──
+  if (els.realtimeLimitPresets) {
+    els.realtimeLimitPresets.addEventListener('click', e => {
+      const btn = e.target.closest('.preset-limit-btn');
+      if (!btn) return;
+      els.realtimeLimitPresets.querySelectorAll('.preset-limit-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const limit = btn.dataset.limit;
+      if (els.realtimeSendLimit) els.realtimeSendLimit.value = limit;
+      if (els.realtimeLimitStatus) els.realtimeLimitStatus.textContent = `${limit} emails max`;
+    });
+  }
+
+  if (els.realtimeSendAllBtn) {
+    els.realtimeSendAllBtn.addEventListener('click', () => {
+      if (els.realtimeSendLimit) els.realtimeSendLimit.value = '';
+      if (els.realtimeLimitStatus) els.realtimeLimitStatus.textContent = 'All eligible';
+      if (els.realtimeLimitPresets) {
+        els.realtimeLimitPresets.querySelectorAll('.preset-limit-btn').forEach(b => b.classList.remove('active'));
+      }
+    });
+  }
+
+  if (els.realtimeSendLimit) {
+    els.realtimeSendLimit.addEventListener('input', () => {
+      const val = parseInt(els.realtimeSendLimit.value, 10);
+      if (els.realtimeLimitPresets) {
+        els.realtimeLimitPresets.querySelectorAll('.preset-limit-btn').forEach(b => {
+          b.classList.toggle('active', parseInt(b.dataset.limit, 10) === val);
+        });
+      }
+      if (els.realtimeLimitStatus) {
+        els.realtimeLimitStatus.textContent = (!isNaN(val) && val > 0) ? `${val} emails max` : 'All eligible';
+      }
+    });
+  }
 
   // ── Cloud schedule type switcher ──
   if (els.schedTypeDates) {
@@ -587,6 +652,8 @@ function setMode(mode) {
   if (els.realtimeDelayGroup) els.realtimeDelayGroup.classList.toggle('hidden', mode !== 'realtime');
   if (els.cloudScheduleSettings) els.cloudScheduleSettings.classList.toggle('hidden', mode !== 'background');
   updateQuotaDisplay();
+  renderSenderPool();
+  updateDailyLimitUI();
 }
 
 function updateCustomDelay() {
@@ -672,15 +739,53 @@ async function detectAccount() {
   }
 }
 
+function updateDailyLimitUI() {
+  if (!els.scheduleDailyLimit) return;
+  const isWorkspace = accountInfo ? accountInfo.isWorkspace : false;
+  let poolCap = 100;
+  if (accountMode === 'multi' && senderPool.length > 0) {
+    poolCap = senderPool.reduce((sum, s) => {
+      const cap = (sendingMode === 'background')
+        ? (s.isWorkspace ? 1500 : 100)
+        : (s.dailyLimit || (s.isWorkspace ? 2000 : 500));
+      return sum + cap;
+    }, 0);
+  } else {
+    poolCap = (sendingMode === 'background')
+      ? (isWorkspace ? 1500 : 100)
+      : (isWorkspace ? 2000 : 500);
+  }
+
+  els.scheduleDailyLimit.max = poolCap;
+  if (parseInt(els.scheduleDailyLimit.value, 10) > poolCap) {
+    els.scheduleDailyLimit.value = poolCap;
+  }
+  if (els.scheduleDailyLimitHint) {
+    if (sendingMode === 'background') {
+      if (accountMode === 'multi' && senderPool.length > 0) {
+        els.scheduleDailyLimitHint.textContent = `Max ${poolCap}/day across pool (${senderPool.length} inboxes: 100/day per personal account)`;
+      } else {
+        els.scheduleDailyLimitHint.textContent = `Max ${poolCap}/day (Google Cloud limit for ${isWorkspace ? 'Workspace' : 'Personal'})`;
+      }
+    } else {
+      els.scheduleDailyLimitHint.textContent = `Max ${poolCap}/day (Real-time sending quota)`;
+    }
+  }
+}
+
 function updateQuotaDisplay() {
   if (accountMode === 'multi' && senderPool.length > 0) {
     const totalPoolCap = senderPool.reduce((sum, s) => {
-      const limit = s.dailyLimit || (s.isWorkspace ? (sendingMode === 'realtime' ? 2000 : 1500) : (sendingMode === 'realtime' ? 500 : 100));
+      const limit = (sendingMode === 'background')
+        ? (s.isWorkspace ? 1500 : 100)
+        : (s.dailyLimit || (s.isWorkspace ? 2000 : 500));
       return sum + limit;
     }, 0);
     if (els.quotaLabel) {
-      els.quotaLabel.textContent = `Daily Quota (Pool of ${senderPool.length} inboxes: ${totalPoolCap}/day):`;
+      const modeLabel = (sendingMode === 'background') ? 'Cloud' : 'Real-Time';
+      els.quotaLabel.textContent = `Daily Quota (Pool of ${senderPool.length} inboxes: ${totalPoolCap}/day [${modeLabel}]):`;
     }
+    updateDailyLimitUI();
     return;
   }
 
@@ -693,6 +798,7 @@ function updateQuotaDisplay() {
     limit = isWorkspace ? 1500 : 100;
     if (els.quotaLabel) els.quotaLabel.textContent = `Daily Quota (Cloud: ${limit}/day):`;
   }
+  updateDailyLimitUI();
 }
 
 // ── Sender Pool Management ──
@@ -715,6 +821,7 @@ function setAccountMode(mode) {
 
   chrome.storage.local.set({ accountMode: mode }).catch(() => {});
   updateQuotaDisplay();
+  renderSenderPool();
 }
 
 async function initSenderAccounts() {
@@ -782,7 +889,9 @@ function renderSenderPool() {
 
     const badgeClass = sender.isWorkspace ? 'workspace' : 'personal';
     const badgeText  = sender.accountType || (sender.isWorkspace ? 'Workspace' : 'Personal');
-    const limitLabel = sender.dailyLimit || (sender.isWorkspace ? 2000 : 500);
+    const limitLabel = (sendingMode === 'background')
+      ? (sender.isWorkspace ? 1500 : 100)
+      : (sender.dailyLimit || (sender.isWorkspace ? 2000 : 500));
 
     const canRemove = !sender.isPrimary;
     const removeHtml = canRemove
@@ -1270,13 +1379,17 @@ function buildPreview() {
   }).join('');
 
   // Summary counts
+  const realtimeLimitVal = parseInt(els.realtimeSendLimit?.value, 10);
+  const hasRealtimeLimit = (sendingMode === 'realtime' && !isNaN(realtimeLimitVal) && realtimeLimitVal > 0);
+  const countToSend = hasRealtimeLimit ? Math.min(willSendRows.length, realtimeLimitVal) : willSendRows.length;
+
   els.summaryTotal.textContent  = rows.length;
   els.summarySkip.textContent   = rows.length - willSendRows.length;
-  els.summaryToSend.textContent = willSendRows.length;
+  els.summaryToSend.textContent = hasRealtimeLimit ? `${countToSend} (Limit: ${realtimeLimitVal})` : willSendRows.length;
 
   const sched = collectScheduleConfig();
   if (sendingMode === 'realtime') {
-    els.summaryMode.textContent = '⚡ Real-time';
+    els.summaryMode.textContent = hasRealtimeLimit ? `⚡ Real-time (Max ${countToSend})` : '⚡ Real-time';
   } else if (sched.scheduleType === 'dates') {
     const range = sched.startDate
       ? (sched.endDate ? `${sched.startDate} to ${sched.endDate}` : `From ${sched.startDate}`)
@@ -1317,7 +1430,7 @@ function buildPreview() {
   if (accountMode === 'multi' && senderPool.length > 0) {
     if (els.sendersBreakdownCard) els.sendersBreakdownCard.classList.remove('hidden');
     if (els.sendersBreakdownList) {
-      const totalToSend = willSendRows.length;
+      const totalToSend = (sendingMode === 'realtime' && hasRealtimeLimit) ? countToSend : willSendRows.length;
       const perSenderCount = Math.floor(totalToSend / senderPool.length);
       const remainder = totalToSend % senderPool.length;
 
@@ -1325,6 +1438,9 @@ function buildPreview() {
         const assigned = perSenderCount + (idx < remainder ? 1 : 0);
         const badgeClass = s.isWorkspace ? 'workspace' : 'personal';
         const attachInfo = s.attachment ? `📎 ${s.attachment.name}` : '(master attachment)';
+        const dailyCap = (sendingMode === 'background')
+          ? (s.isWorkspace ? 1500 : 100)
+          : (s.dailyLimit || (s.isWorkspace ? 2000 : 500));
         return `
           <div class="sender-breakdown-row">
             <div class="sender-breakdown-email">
@@ -1332,7 +1448,7 @@ function buildPreview() {
               <span class="sender-badge ${badgeClass}">${s.accountType || (s.isWorkspace ? 'Workspace' : 'Personal')}</span>
             </div>
             <div class="sender-breakdown-stat">
-              <strong>${assigned}</strong> emails <span style="color:var(--text-dim);font-size:.7rem;">(Cap: ${s.dailyLimit || (s.isWorkspace ? 2000 : 500)}/day | ${escapeHtml(attachInfo)})</span>
+              <strong>${assigned}</strong> total campaign emails <span style="color:var(--text-dim);font-size:.7rem;">(Paced at ${dailyCap}/day | ${escapeHtml(attachInfo)})</span>
             </div>
           </div>
         `;
@@ -1345,7 +1461,17 @@ function buildPreview() {
   // Daily limit warning
   getDailyCount().then(count => {
     const isWorkspace = accountInfo ? accountInfo.isWorkspace : false;
-    const maxLimit = sendingMode === 'realtime' ? (isWorkspace ? 2000 : 500) : (isWorkspace ? 1500 : 100);
+    let maxLimit;
+    if (accountMode === 'multi' && senderPool.length > 0) {
+      maxLimit = senderPool.reduce((sum, s) => {
+        const cap = (sendingMode === 'background')
+          ? (s.isWorkspace ? 1500 : 100)
+          : (s.dailyLimit || (s.isWorkspace ? 2000 : 500));
+        return sum + cap;
+      }, 0);
+    } else {
+      maxLimit = sendingMode === 'realtime' ? (isWorkspace ? 2000 : 500) : (isWorkspace ? 1500 : 100);
+    }
     if (els.limitWarning) {
       els.limitWarning.classList.toggle('hidden', (count + willSendRows.length) < (maxLimit * 0.9));
     }
@@ -1364,6 +1490,10 @@ async function startCampaign() {
   try {
     const companyLimits = collectCompanyLimits();
     const schedule = collectScheduleConfig();
+    const realtimeLimitVal = parseInt(els.realtimeSendLimit?.value, 10);
+    const sendLimit = (sendingMode === 'realtime' && !isNaN(realtimeLimitVal) && realtimeLimitVal > 0)
+      ? realtimeLimitVal
+      : null;
 
     await sendBg('startCampaign', {
       config: {
@@ -1375,6 +1505,7 @@ async function startCampaign() {
         sheetName:     sheetData.sheetName,
         mode:          sendingMode,
         delay:         delayConfig,
+        sendLimit,
         companyLimits,
         schedule,
         accountMode,
@@ -1394,13 +1525,21 @@ async function startCampaign() {
 
 function updateDashboard(state) {
   if (!state) return;
-  const { sentCount, failedCount, skippedCount, totalRows, isPaused, isRunning } = state;
+  const { sentCount, failedCount, skippedCount, totalRows, isPaused, isRunning, sendLimit, sentThisRun } = state;
   const processed = sentCount + failedCount + skippedCount;
-  const pending   = totalRows - processed;
-  const pct       = totalRows > 0 ? Math.round((processed / totalRows) * 100) : 0;
+  const pending   = Math.max(0, totalRows - processed);
 
-  els.progressBar.style.width = `${pct}%`;
-  els.progressText.textContent = `${pct} %`;
+  if (sendLimit && sendLimit > 0) {
+    const target = sendLimit;
+    const current = sentThisRun || 0;
+    const limitPct = Math.min(100, Math.round((current / target) * 100));
+    els.progressBar.style.width = `${limitPct}%`;
+    els.progressText.textContent = `${current} / ${target} (${limitPct}%)`;
+  } else {
+    const pct = totalRows > 0 ? Math.round((sentCount / totalRows) * 100) : 0;
+    els.progressBar.style.width = `${pct}%`;
+    els.progressText.textContent = `${pct} %`;
+  }
 
   els.statSent.textContent    = sentCount;
   els.statFailed.textContent  = failedCount;
@@ -1409,16 +1548,25 @@ function updateDashboard(state) {
 
   // Status badge
   if (!isRunning) {
-    if (els.statusBadge.textContent !== 'Stopped 🛑' && !els.statusBadge.textContent.includes('Drafts Queued')) {
+    if (sendLimit && (sentThisRun || 0) >= sendLimit) {
+      els.statusBadge.className = 'status-badge complete';
+      els.statusBadge.textContent = `Target Reached (${sentThisRun}/${sendLimit}) ✓`;
+    } else if (els.statusBadge.textContent !== 'Stopped 🛑' && !els.statusBadge.textContent.includes('Drafts Queued')) {
       els.statusBadge.className = 'status-badge stopped';
-      els.statusBadge.textContent = 'Stopped';
+      els.statusBadge.textContent = 'Completed ✓';
     }
   } else if (isPaused) {
     els.statusBadge.className = 'status-badge paused';
     els.statusBadge.textContent = 'Paused';
   } else {
     els.statusBadge.className = 'status-badge running';
-    els.statusBadge.textContent = (state.mode === 'background' || sendingMode === 'background') ? 'Queuing Drafts…' : 'Running…';
+    if (state.mode === 'background' || sendingMode === 'background') {
+      els.statusBadge.textContent = 'Queuing Drafts…';
+    } else if (sendLimit && sendLimit > 0) {
+      els.statusBadge.textContent = `Sending (${sentThisRun || 0}/${sendLimit})…`;
+    } else {
+      els.statusBadge.textContent = 'Running…';
+    }
   }
 
   // Buttons
@@ -1694,6 +1842,7 @@ function updateDashboardFromSheetRows(rows = []) {
   let failed = 0;
   let queued = 0;
   let pending = 0;
+  let skipped = 0;
 
   rows.forEach(r => {
     const s = String(r['Status'] || '').trim();
@@ -1705,13 +1854,13 @@ function updateDashboardFromSheetRows(rows = []) {
       queued++;
     } else if (s === 'Pending ⏳') {
       pending++;
+    } else if (s.startsWith('Skipped')) {
+      skipped++;
     }
   });
 
-  const skipped = Math.max(0, total - (sent + failed + queued + pending));
-  const processed = sent + failed + skipped;
-  const remainingPending = queued + pending;
-  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+  const remainingPending = Math.max(0, total - (sent + failed + skipped));
+  const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
 
   els.progressBar.style.width = `${pct}%`;
   els.progressText.textContent = `${pct} %`;
@@ -1730,8 +1879,8 @@ function updateDashboardFromSheetRows(rows = []) {
   } else if (queued > 0) {
     els.statusBadge.className = 'status-badge queued';
     els.statusBadge.textContent = (sent > 0)
-      ? `${sent} Sent (${queued} Queued)`
-      : `${queued} Drafts Queued`;
+      ? `${sent} Sent (${queued} Queued in Cloud)`
+      : `${queued} Drafts Queued in Cloud`;
   } else if (sent > 0) {
     els.statusBadge.className = 'status-badge running';
     els.statusBadge.textContent = `${sent} Sent ✓`;

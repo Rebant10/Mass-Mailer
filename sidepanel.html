@@ -269,6 +269,25 @@
             <input type="range" id="maxDelaySlider" class="slider" min="2" max="300" value="20">
           </div>
         </div>
+
+        <!-- Real-Time Send Limit -->
+        <div style="margin-top:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <label class="label" style="margin-bottom:0;">🎯 Max Emails to Send (This Run)</label>
+            <span style="font-size:0.7rem;color:var(--text-dim);" id="realtimeLimitStatus">All eligible</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="number" id="realtimeSendLimit" class="input" min="1" placeholder="All eligible in sheet (or enter e.g. 10)">
+            <button type="button" class="btn btn-ghost btn-sm" id="realtimeSendAllBtn" style="white-space:nowrap;padding:7px 12px;font-size:0.75rem;font-weight:600;">All</button>
+          </div>
+          <div class="delay-presets" style="margin-top:8px;" id="realtimeLimitPresets">
+            <button type="button" class="delay-btn preset-limit-btn" data-limit="5">5<br><small>Test run</small></button>
+            <button type="button" class="delay-btn preset-limit-btn" data-limit="10">10<br><small>Small</small></button>
+            <button type="button" class="delay-btn preset-limit-btn" data-limit="25">25<br><small>Medium</small></button>
+            <button type="button" class="delay-btn preset-limit-btn" data-limit="50">50<br><small>Large</small></button>
+          </div>
+          <p class="field-hint" id="realtimeSendLimitHint">Leave blank or click "All" to send all remaining rows. Or select a batch size to stop automatically after that many.</p>
+        </div>
       </div>
 
       <!-- Cloud Schedule Settings (Background mode) -->
@@ -347,7 +366,7 @@
           <div class="time-col">
             <label class="label">🎯 Daily Send Limit</label>
             <input type="number" id="scheduleDailyLimit" class="input" min="1" max="500" value="40">
-            <p class="field-hint">Max emails sent per 24 hours</p>
+            <p class="field-hint" id="scheduleDailyLimitHint">Max emails sent per 24 hours</p>
           </div>
         </div>
 

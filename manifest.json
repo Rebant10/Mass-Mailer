@@ -6,6 +6,7 @@
   "permissions": [
     "identity",
     "storage",
+    "unlimitedStorage",
     "sidePanel",
     "activeTab"
   ],

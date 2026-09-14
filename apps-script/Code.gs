@@ -121,14 +121,29 @@ function processQueue() {
     return;
   }
 
-  // 3. Daily limit & batch size check (read dynamically from config)
-  const dailyLimit = parseInt(config.dailyLimit, 10) || 40;
+  const activeSender = (Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail() || '').trim().toLowerCase();
+  const isWorkspace = !/@(gmail|googlemail)\.com$/i.test(activeSender);
+  const platformCap = isWorkspace ? 1500 : 100;
+
+  // 3. Daily limit & batch size check (clamped to physical platform limit of 100 for personal Gmail)
   const batchSize = parseInt(config.batchSize, 10) || 2;
   const delaySeconds = parseInt(config.delaySeconds, 10) || 5;
 
-  let todaySentCount = countTodaySent(sheet, sentAtIdx);
-  if (todaySentCount >= dailyLimit) {
-    Logger.log(`🎯 Daily send limit of ${dailyLimit} reached for today (${todaySentCount} already sent).`);
+  let accountDailyLimit = platformCap;
+  const configuredDaily = parseInt(config.dailyLimit, 10);
+  if (configuredDaily > 0) {
+    const senderCount = parseInt(config.senderCount, 10) || 1;
+    if (senderCount > 1) {
+      const perAccountTarget = Math.ceil(configuredDaily / senderCount);
+      accountDailyLimit = Math.min(perAccountTarget, platformCap);
+    } else {
+      accountDailyLimit = Math.min(configuredDaily, platformCap);
+    }
+  }
+
+  let todaySentCount = countTodaySent(sheet, sentAtIdx, sentFromIdx, activeSender);
+  if (todaySentCount >= accountDailyLimit) {
+    Logger.log(`🎯 Daily send limit of ${accountDailyLimit} reached for ${activeSender} today (${todaySentCount} already sent).`);
     return;
   }
 
@@ -163,7 +178,7 @@ function processQueue() {
   }
 
   // 6. Find and send candidate rows
-  const maxToSend = Math.min(batchSize, dailyLimit - todaySentCount);
+  const maxToSend = Math.min(batchSize, accountDailyLimit - todaySentCount);
   let sentInThisRun = 0;
 
   for (let i = 1; i < data.length && sentInThisRun < maxToSend; i++) {
@@ -172,10 +187,17 @@ function processQueue() {
     const draftId = draftIdIdx !== -1 ? String(row[draftIdIdx] || '').trim() : '';
     const email = emailIdx !== -1 ? String(row[emailIdx] || '').trim() : '';
     const company = compIdx !== -1 ? String(row[compIdx] || '').trim() : '';
+    const targetSender = sentFromIdx !== -1 ? String(row[sentFromIdx] || '').trim().toLowerCase() : '';
     const rowNum = i + 1;
 
     // Skip already sent rows
     if (status === 'Sent ✓') continue;
+
+    // Multi-Account Guard: If this row is assigned to a different account in the pool,
+    // skip it so the matching account's cloud trigger can send its own drafts/emails!
+    if (targetSender && activeSender && targetSender !== activeSender) {
+      continue;
+    }
 
     // Must have an email address
     if (!email || !email.includes('@')) {
@@ -205,8 +227,11 @@ function processQueue() {
       SpreadsheetApp.flush();
 
       if (draftId) {
-        // Send existing Gmail draft
+        // Send existing Gmail draft (must exist in active account's mailbox)
         const draft = GmailApp.getDraft(draftId);
+        if (!draft) {
+          throw new Error('Draft not found in mailbox');
+        }
         draft.send();
         if (draftIdIdx !== -1) {
           sheet.getRange(rowNum, draftIdIdx + 1).setValue('');
@@ -219,8 +244,17 @@ function processQueue() {
         const subjectTemplate = config.subject || 'Follow up';
         const bodyTemplate    = config.body || '';
 
-        const subject = parsePlaceholders(subjectTemplate, rowMap);
-        const body    = parsePlaceholders(bodyTemplate, rowMap);
+        let senderProfiles = [];
+        try {
+          senderProfiles = JSON.parse(config.senderProfiles || '[]');
+        } catch (e) {}
+        const activeProfile = senderProfiles.find(p => (p.email || '').toLowerCase() === activeSender) || {
+          email: activeSender,
+          name: activeSender.split('@')[0]
+        };
+
+        const subject = parsePlaceholders(subjectTemplate, rowMap, activeProfile);
+        const body    = parsePlaceholders(bodyTemplate, rowMap, activeProfile);
         const html    = bodyToHtml(body);
 
         GmailApp.sendEmail(email, subject, body, {
@@ -234,8 +268,7 @@ function processQueue() {
         const nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
         sheet.getRange(rowNum, sentAtIdx + 1).setValue(nowStr);
       }
-      if (sentFromIdx !== -1) {
-        const activeSender = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+      if (sentFromIdx !== -1 && !targetSender) {
         if (activeSender) {
           sheet.getRange(rowNum, sentFromIdx + 1).setValue(activeSender);
         }
@@ -257,15 +290,26 @@ function processQueue() {
       }
 
     } catch (err) {
-      sheet.getRange(rowNum, statusIdx + 1).setValue('Failed ✗ (' + err.message + ')');
-      Logger.log(`❌ Error sending row ${rowNum}: ${err.message}`);
+      const errMsg = err.message || '';
+      Logger.log(`❌ Error sending row ${rowNum}: ${errMsg}`);
+
+      // QUOTA CIRCUIT-BREAKER: If daily quota is exhausted, STOP immediately!
+      // Do NOT burn through the rest of the sheet or mark other rows failed.
+      if (errMsg.includes('Service invoked too many times') || errMsg.includes('quota') || errMsg.includes('limit')) {
+        sheet.getRange(rowNum, statusIdx + 1).setValue(''); // Leave blank for tomorrow
+        SpreadsheetApp.flush();
+        Logger.log('🛑 Daily email quota reached for this account. Halting cloud execution until tomorrow.');
+        break;
+      } else {
+        sheet.getRange(rowNum, statusIdx + 1).setValue('Failed ✗ (' + errMsg + ')');
+      }
     }
   }
 
   if (sentInThisRun === 0) {
-    Logger.log('📭 No eligible unsent emails found in this run.');
+    Logger.log('📭 No eligible unsent emails found in this run for active account: ' + activeSender);
   } else {
-    Logger.log(`📤 Cloud Scheduler sent ${sentInThisRun} email(s) this run. Today's total: ${todaySentCount}/${dailyLimit}`);
+    Logger.log(`📤 Cloud Scheduler sent ${sentInThisRun} email(s) this run for ${activeSender}. Today's total: ${todaySentCount}/${accountDailyLimit}`);
   }
 }
 
@@ -348,7 +392,7 @@ function isWithinSchedule(config) {
   return true;
 }
 
-function countTodaySent(sheet, sentAtIdx) {
+function countTodaySent(sheet, sentAtIdx, sentFromIdx, activeSender) {
   if (sentAtIdx === -1) return 0;
   const data = sheet.getDataRange().getValues();
   const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy');
@@ -357,6 +401,12 @@ function countTodaySent(sheet, sentAtIdx) {
   for (let i = 1; i < data.length; i++) {
     const val = String(data[i][sentAtIdx] || '');
     if (val.indexOf(todayStr) !== -1) {
+      if (sentFromIdx !== -1 && activeSender) {
+        const sender = String(data[i][sentFromIdx] || '').trim().toLowerCase();
+        if (sender && sender !== activeSender) {
+          continue; // Sent by another sender in the pool, do not count against this account
+        }
+      }
       count++;
     }
   }
@@ -375,7 +425,7 @@ function findCol(headers, candidates) {
 
 function parsePlaceholders(template, rowData, senderProfile) {
   if (!template) return '';
-  return template.replace(/\{\{?([A-Za-z0-9_.\s]+)\}?\}/g, (match, rawKey) => {
+  return template.replace(/\{+([^}]+)\}+/g, (match, rawKey) => {
     const key = rawKey.trim();
     if (key.startsWith('Sender.')) {
       const field = key.slice(7).toLowerCase();
@@ -388,7 +438,7 @@ function parsePlaceholders(template, rowData, senderProfile) {
       if (field === 'title') return profile.title || '';
       if (field === 'signature') return profile.signature || '';
       if (field === 'phone') return profile.phone || '';
-      return profile[key.slice(7)] || '';
+      return '';
     }
     if (rowData && Object.prototype.hasOwnProperty.call(rowData, key)) {
       const val = rowData[key];
